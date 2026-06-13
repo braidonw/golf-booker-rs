@@ -4,6 +4,7 @@ mod clubs;
 mod events;
 mod jobs;
 mod protected;
+mod ratelimit;
 mod render;
 
 pub use app::App;

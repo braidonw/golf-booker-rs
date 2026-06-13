@@ -63,10 +63,22 @@ mod post {
         Form(creds): Form<Credentials>,
     ) -> Result<Response, AppError> {
         let next = safe_next(creds.next.as_deref());
+        let limiter = crate::web::ratelimit::login_limiter();
+        let key = creds.username.to_lowercase();
+
+        // Throttle repeated failures for a username before doing any work.
+        if !limiter.allowed(&key) {
+            return Ok(render(&LoginTemplate {
+                message: Some("Too many attempts. Wait a few minutes and try again.".to_string()),
+                next,
+            })?
+            .into_response());
+        }
 
         let user = match auth_session.authenticate(creds.clone()).await? {
             Some(user) => user,
             None => {
+                limiter.record_failure(&key);
                 return Ok(render(&LoginTemplate {
                     message: Some("Invalid username or password.".to_string()),
                     next,
@@ -76,6 +88,7 @@ mod post {
         };
 
         auth_session.login(&user).await?;
+        limiter.record_success(&key);
 
         Ok(Redirect::to(next.as_deref().unwrap_or("/")).into_response())
     }

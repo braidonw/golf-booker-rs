@@ -34,12 +34,16 @@ the sqlx session store pins sqlx 0.8. Don't bump one in isolation.
       locally), persistent volume for SQLite, secrets via env, docker-compose
       with a Tailscale Serve sidecar for HTTPS, tailnet-only access. See
       `docs/DEPLOY.md`.
-- [ ] **6 — Polish.** Scheduler timing tests, booking error classification
-      (retryable vs terminal), login rate-limiting (deferred from Phase 1),
-      cleanup.
+- [x] **6 — Polish.** Login rate-limiting (per-username, in-memory), booking
+      error classification (terminal failures stop the retry loop), scheduler
+      timing tests, warning-free build.
 
 ## Deferred / follow-ups
 
-- Login rate-limiting (per IP + per username) before any non-tailnet exposure.
+- **Live-club smoke test**: the login/book POST and event/sheet parsing are only
+  exercised against a mock. Verify against the real club (add it, browse, then
+  one real `DRY_RUN=false` booking) before relying on a scheduled job.
 - Encrypt club credentials at rest (currently plaintext by necessity).
-- Booking error classification to retry only retryable failures.
+- Change-password / add-user UI (accounts are env-seeded for now).
+- Per-IP rate limiting only becomes meaningful if exposed beyond the tailnet
+  (behind the Tailscale proxy every request shares one source IP).

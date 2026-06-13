@@ -111,10 +111,12 @@ impl GolfClient {
         Ok(event)
     }
 
-    /// Make a booking against a booking group (the `rowId`). Returns an error if
-    /// the club responds with a booking error (e.g. sheet not open, already
-    /// booked). Callers gate this behind dry-run where appropriate.
-    pub async fn book(&self, booking_group_id: u32) -> anyhow::Result<()> {
+    /// Make a booking against a booking group (the `rowId`).
+    ///
+    /// Errors are classified so the scheduler can keep racing on retryable
+    /// failures ("sheet not open yet", transient network) but stop immediately
+    /// on terminal ones ("already booked", "not eligible").
+    pub async fn book(&self, booking_group_id: u32) -> Result<(), BookingError> {
         let row_id = booking_group_id.to_string();
         let params = [
             ("doAction", "makeBooking"),
@@ -124,21 +126,78 @@ impl GolfClient {
             ("findAlternative", "false"),
         ];
         let url = format!("{}/members/Ajax", self.base_url);
-        let body = self
+
+        // Transport failures are worth retrying within the race window.
+        let resp = self
             .http
             .post(&url)
             .form(&params)
             .send()
-            .await?
+            .await
+            .map_err(|e| BookingError::Retryable(format!("request failed: {e}")))?;
+        let body = resp
             .text()
-            .await?;
+            .await
+            .map_err(|e| BookingError::Retryable(format!("reading response failed: {e}")))?;
 
         // A booking error comes back as an XML <Error><ErrorText>… document;
         // a success is anything that doesn't parse as that error shape.
         match parse_booking_error(&body) {
-            Some(message) => Err(anyhow::anyhow!(message)),
+            Some(message) => Err(classify_booking_error(&message)),
             None => Ok(()),
         }
+    }
+}
+
+/// A booking failure, tagged with whether retrying could plausibly succeed.
+#[derive(Debug)]
+pub enum BookingError {
+    /// Worth retrying within the race window (sheet not open yet, transient).
+    Retryable(String),
+    /// Permanent — retrying won't help (already booked, ineligible).
+    Terminal(String),
+}
+
+impl BookingError {
+    pub fn is_retryable(&self) -> bool {
+        matches!(self, BookingError::Retryable(_))
+    }
+
+    fn message(&self) -> &str {
+        match self {
+            BookingError::Retryable(m) | BookingError::Terminal(m) => m,
+        }
+    }
+}
+
+impl std::fmt::Display for BookingError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.message())
+    }
+}
+
+impl std::error::Error for BookingError {}
+
+/// Classify a club booking-error message as retryable or terminal. Unknown
+/// messages default to retryable, since during the race "not open yet" is the
+/// common case and retrying is cheap; the retry window bounds the cost.
+fn classify_booking_error(message: &str) -> BookingError {
+    const TERMINAL_MARKERS: &[&str] = &[
+        "already",
+        "not eligible",
+        "ineligible",
+        "not allowed",
+        "duplicate",
+        "exceeded",
+        "maximum",
+        "no longer",
+        "permission",
+    ];
+    let lower = message.to_lowercase();
+    if TERMINAL_MARKERS.iter().any(|m| lower.contains(m)) {
+        BookingError::Terminal(message.to_string())
+    } else {
+        BookingError::Retryable(message.to_string())
     }
 }
 
@@ -194,5 +253,29 @@ mod tests {
     fn no_error_elements_is_success() {
         // A response with no <Error> elements is a successful booking.
         assert!(parse_booking_error("<Response><ok/></Response>").is_none());
+    }
+
+    #[test]
+    fn classifies_terminal_errors() {
+        for msg in [
+            "You have already booked this competition",
+            "Member not eligible for this event",
+            "Booking limit exceeded",
+        ] {
+            assert!(
+                !classify_booking_error(msg).is_retryable(),
+                "expected terminal: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn classifies_retryable_and_unknown_errors() {
+        for msg in ["Booking sheet is not open yet", "Some unexpected message"] {
+            assert!(
+                classify_booking_error(msg).is_retryable(),
+                "expected retryable: {msg}"
+            );
+        }
     }
 }

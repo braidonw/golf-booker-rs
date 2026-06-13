@@ -332,12 +332,14 @@ async fn fire_booking(
         }
         match client.book(group).await {
             Ok(()) => return Ok(()),
+            // Terminal errors (already booked, ineligible) won't change on retry.
+            Err(e) if !e.is_retryable() => {
+                return Err(anyhow::anyhow!("{e}"));
+            }
             Err(e) => {
-                // Retry on any error until the deadline. Classifying retryable
-                // ("sheet not open yet") vs terminal ("already booked") needs
-                // real MiClub responses — a Phase 6 follow-up.
                 if Utc::now() >= deadline {
-                    return Err(e.context(format!("gave up after {attempt} attempt(s)")));
+                    return Err(anyhow::anyhow!("{e}")
+                        .context(format!("gave up after {attempt} attempt(s)")));
                 }
                 warn!("booking attempt {attempt} for group {group} failed: {e} — retrying");
                 sleep(RETRY_INTERVAL).await;
@@ -348,11 +350,16 @@ async fn fire_booking(
 
 /// Sleep until `target - lead_secs`, returning immediately if already past it.
 async fn sleep_until(target: DateTime<Utc>, lead_secs: i64) {
-    let fire_at = target - chrono::Duration::seconds(lead_secs);
-    if let Ok(delta) = (fire_at - Utc::now()).to_std() {
-        sleep(delta).await;
+    if let Some(delay) = delay_until(target, lead_secs, Utc::now()) {
+        sleep(delay).await;
     }
-    // A negative delta -> to_std() errors -> we're already due, fire now.
+}
+
+/// How long to wait from `now` until `target - lead_secs`, or `None` if that
+/// moment has already passed (a negative span yields no wait).
+fn delay_until(target: DateTime<Utc>, lead_secs: i64, now: DateTime<Utc>) -> Option<Duration> {
+    let fire_at = target - chrono::Duration::seconds(lead_secs);
+    (fire_at - now).to_std().ok()
 }
 
 async fn set_status(
@@ -411,6 +418,30 @@ mod tests {
             assert_eq!(s.to_string().parse::<JobStatus>().unwrap(), s);
         }
         assert!("bogus".parse::<JobStatus>().is_err());
+    }
+
+    #[test]
+    fn delay_until_waits_for_future_preauth_point() {
+        let now = DateTime::parse_from_rfc3339("2026-06-20T00:00:00+00:00")
+            .unwrap()
+            .with_timezone(&Utc);
+        let target = now + chrono::Duration::seconds(100);
+        // Pre-auth 30s early -> fire point is 70s away.
+        let delay = delay_until(target, PREAUTH_LEAD_SECS, now).unwrap();
+        assert_eq!(delay.as_secs(), 70);
+    }
+
+    #[test]
+    fn delay_until_is_none_when_past() {
+        let now = DateTime::parse_from_rfc3339("2026-06-20T00:00:00+00:00")
+            .unwrap()
+            .with_timezone(&Utc);
+        // Target already 10s ago -> no wait.
+        let target = now - chrono::Duration::seconds(10);
+        assert!(delay_until(target, 0, now).is_none());
+        // Within the pre-auth lead of the target -> also already due.
+        let soon = now + chrono::Duration::seconds(10);
+        assert!(delay_until(soon, PREAUTH_LEAD_SECS, now).is_none());
     }
 
     #[test]
