@@ -139,3 +139,9 @@ preferred because it gives a clean hostname and real HTTPS.
   cookie. Use the HTTPS `ts.net` URL (not an IP), or set `COOKIE_SECURE=false`.
 - **DB resets on redeploy**: the `golf-data` volume isn't persisting — check the
   Coolify volume mapping to `/data`.
+- **App container restart-loops with the sidecar logging `serve config: ... is a
+  directory`**: the Tailscale serve config is baked into the sidecar image
+  (`tailscale/Dockerfile`), not bind-mounted, precisely to avoid this — make sure
+  you're deploying the current compose (the `tailscale` service uses `build:`,
+  not `image:`). Because golf-booker shares the sidecar's network, a flapping
+  sidecar restarts the app too; the app itself is fine.

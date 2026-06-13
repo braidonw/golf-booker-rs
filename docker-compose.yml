@@ -8,7 +8,10 @@
 
 services:
   tailscale:
-    image: tailscale/tailscale:latest
+    # Build a sidecar image with serve.json baked in (no fragile bind mount).
+    build:
+      context: .
+      dockerfile: tailscale/Dockerfile
     container_name: golf-booker-ts
     hostname: golf-booker # -> https://golf-booker.<tailnet>.ts.net
     environment:
@@ -18,7 +21,6 @@ services:
       TS_USERSPACE: "false"
     volumes:
       - tailscale-state:/var/lib/tailscale
-      - ./tailscale/serve.json:/config/serve.json:ro
     devices:
       - /dev/net/tun:/dev/net/tun
     cap_add:
