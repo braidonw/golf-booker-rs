@@ -16,7 +16,7 @@ use tower_http::trace::TraceLayer;
 use tower_sessions::cookie::{time::Duration, SameSite};
 use tower_sessions_sqlx_store::SqliteStore;
 
-use super::{auth, protected};
+use super::{auth, clubs, protected};
 
 /// Shared application state handed to every request handler.
 pub struct AppState {
@@ -40,8 +40,10 @@ impl App {
 
         let db = crate::db::connect(&config.database_url).await?;
 
-        // Seed the first login account from the environment if none exist.
+        // Seed the first login account and any clubs from the environment if
+        // none exist yet (transparent migration from an env-only setup).
         crate::users::seed_from_environment(&db).await?;
+        crate::clubs::seed_from_environment(&db).await?;
 
         Ok(Self {
             state: Arc::new(AppState { db, config }),
@@ -68,6 +70,7 @@ impl App {
 
         let app = Router::new()
             .merge(protected::router(self.state.clone()))
+            .merge(clubs::router(self.state.clone()))
             .route_layer(login_required!(Backend, login_url = "/login"))
             .merge(auth::router())
             .route("/health", get(health))

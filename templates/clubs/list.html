@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Clubs · Golf Booker{% endblock %}
+{% block header %}{% include "partials/header.html" %}{% endblock %}
+{% block content %}
+<h1>Clubs</h1>
+
+{% if let Some(error) = error %}
+  <p class="alert" data-variant="danger" role="alert">{{ error }}</p>
+{% endif %}
+
+{% if clubs.is_empty() %}
+  <p>No clubs yet. Add one below.</p>
+{% else %}
+  <table>
+    <thead>
+      <tr><th>Name</th><th>Site</th><th>Timezone</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for club in clubs %}
+        <tr>
+          <td>{{ club.name }}</td>
+          <td><a href="{{ club.base_url }}" target="_blank" rel="noreferrer noopener">{{ club.base_url }}</a></td>
+          <td>{{ club.timezone }}</td>
+          <td>
+            <span class="cluster" style="--cluster-gap: var(--space-sm);">
+              <a href="/clubs/{{ club.id }}/edit">Edit</a>
+              <form method="post" action="/clubs/{{ club.id }}/delete"
+                    hx-post="/clubs/{{ club.id }}/delete"
+                    hx-target="closest tr" hx-swap="outerHTML"
+                    hx-confirm="Delete {{ club.name }}?"
+                    class="logout-form">
+                <button class="link-button" type="submit">Delete</button>
+              </form>
+            </span>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endif %}
+
+<div class="card flow" style="margin-block-start: var(--space-lg);">
+  <h2>Add a club</h2>
+  <form method="post" action="/clubs" class="flow">
+    <label>Name <input class="input" type="text" name="name" value="{{ form.name }}" required></label>
+    <label>Base URL <input class="input" type="url" name="base_url" value="{{ form.base_url }}" placeholder="https://example.com" required></label>
+    <label>Club username <input class="input" type="text" name="username" value="{{ form.username }}" required></label>
+    <label>Club password <input class="input" type="password" name="password" autocomplete="off" required></label>
+    <label>Member ID <input class="input" type="text" name="member_id" value="{{ form.member_id }}" required></label>
+    <label>Timezone
+      <input class="input" type="text" name="timezone" value="{{ form.timezone }}" list="timezones" required>
+    </label>
+    <button class="button" type="submit">Add club</button>
+  </form>
+</div>
+
+<datalist id="timezones">
+  {% for tz in timezones %}<option value="{{ tz }}">{% endfor %}
+</datalist>
+{% endblock %}

@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Edit club · Golf Booker{% endblock %}
+{% block header %}{% include "partials/header.html" %}{% endblock %}
+{% block content %}
+<h1>Edit club</h1>
+
+{% if let Some(error) = error %}
+  <p class="alert" data-variant="danger" role="alert">{{ error }}</p>
+{% endif %}
+
+<div class="card flow">
+  <form method="post" action="/clubs/{{ id }}" class="flow">
+    <label>Name <input class="input" type="text" name="name" value="{{ form.name }}" required></label>
+    <label>Base URL <input class="input" type="url" name="base_url" value="{{ form.base_url }}" required></label>
+    <label>Club username <input class="input" type="text" name="username" value="{{ form.username }}" required></label>
+    <label>Club password
+      <input class="input" type="password" name="password" autocomplete="off" placeholder="Leave blank to keep current">
+    </label>
+    <label>Member ID <input class="input" type="text" name="member_id" value="{{ form.member_id }}" required></label>
+    <label>Timezone
+      <input class="input" type="text" name="timezone" value="{{ form.timezone }}" list="timezones" required>
+    </label>
+    <div class="cluster" style="--cluster-gap: var(--space-sm);">
+      <button class="button" type="submit">Save changes</button>
+      <a href="/clubs">Cancel</a>
+    </div>
+  </form>
+</div>
+
+<datalist id="timezones">
+  {% for tz in timezones %}<option value="{{ tz }}">{% endfor %}
+</datalist>
+{% endblock %}

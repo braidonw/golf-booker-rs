@@ -1,5 +1,6 @@
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
+mod clubs;
 mod config;
 mod db;
 mod error;
@@ -12,9 +13,9 @@ async fn main() -> anyhow::Result<()> {
     let _ = dotenvy::dotenv();
 
     tracing_subscriber::registry()
-        .with(EnvFilter::new(std::env::var("RUST_LOG").unwrap_or_else(|_| {
-            "golf_booker=info,tower_http=info,axum_login=info,sqlx=warn".into()
-        })))
+        .with(EnvFilter::new(std::env::var("RUST_LOG").unwrap_or_else(
+            |_| "golf_booker=info,tower_http=info,axum_login=info,sqlx=warn".into(),
+        )))
         .with(tracing_subscriber::fmt::layer())
         .try_init()?;
 
