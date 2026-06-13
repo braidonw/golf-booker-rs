@@ -1,18 +1,25 @@
 {% extends "base.html" %}
 {% block title %}Golf Booker{% endblock %}
+{% block header %}{% include "partials/header.html" %}{% endblock %}
 {% block content %}
-<h1>Golf Booker</h1>
-<p>Scaffold is up and running.</p>
+<h1>Welcome, {{ username }}</h1>
+<p>Browse clubs, book a slot, or schedule a booking for the moment a sheet opens.</p>
+
 <div class="card">
   <p>
     Scheduler mode:
     {% if dry_run %}
       <span class="badge" data-status="pending">dry-run</span>
-      (no real bookings will be made)
+      — no real bookings will be made.
     {% else %}
       <span class="badge" data-status="completed">live</span>
-      (real bookings enabled)
+      — real bookings enabled.
     {% endif %}
   </p>
+</div>
+
+<div class="cluster" style="--cluster-gap: var(--space-sm);">
+  <a class="button" href="/clubs">Manage clubs</a>
+  <a class="button" href="/scheduled-jobs">Scheduled bookings</a>
 </div>
 {% endblock %}

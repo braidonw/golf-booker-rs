@@ -3,6 +3,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 mod config;
 mod db;
 mod error;
+mod users;
 mod web;
 
 #[tokio::main]

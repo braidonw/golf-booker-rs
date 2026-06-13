@@ -1,15 +1,22 @@
 //! HTTP application wiring: state, router, server.
 
 use crate::config::Config;
-use crate::error::AppError;
-use crate::web::render;
-use askama::Template;
-use axum::{extract::State, response::IntoResponse, routing::get, Router};
+use crate::users::Backend;
+use axum::{routing::get, Router};
+use axum_login::{
+    login_required,
+    tower_sessions::{Expiry, SessionManagerLayer},
+    AuthManagerLayerBuilder,
+};
 use sqlx::SqlitePool;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
+use tower_sessions::cookie::time::Duration;
+use tower_sessions_sqlx_store::SqliteStore;
+
+use super::{auth, protected};
 
 /// Shared application state handed to every request handler.
 pub struct AppState {
@@ -20,18 +27,6 @@ pub struct AppState {
 /// Owns startup-time resources before the server is launched.
 pub struct App {
     state: Arc<AppState>,
-}
-
-#[derive(Template)]
-#[template(path = "home.html")]
-struct HomeTemplate {
-    dry_run: bool,
-}
-
-async fn home(State(state): State<Arc<AppState>>) -> Result<impl IntoResponse, AppError> {
-    render(&HomeTemplate {
-        dry_run: state.config.dry_run,
-    })
 }
 
 async fn health() -> &'static str {
@@ -45,6 +40,9 @@ impl App {
 
         let db = crate::db::connect(&config.database_url).await?;
 
+        // Seed the first login account from the environment if none exist.
+        crate::users::seed_from_environment(&db).await?;
+
         Ok(Self {
             state: Arc::new(AppState { db, config }),
         })
@@ -52,13 +50,28 @@ impl App {
 
     pub async fn serve(self) -> anyhow::Result<()> {
         let port = self.state.config.port;
+        let db = self.state.db.clone();
+
+        // Persistent session store (survives restarts), sharing our pool.
+        let session_store = SqliteStore::new(db.clone());
+        session_store.migrate().await?;
+        let session_layer = SessionManagerLayer::new(session_store)
+            .with_secure(false) // behind Tailscale/Coolify TLS termination
+            .with_expiry(Expiry::OnInactivity(Duration::days(7)));
+
+        // Auth layer: combines sessions with our credential backend. The layer
+        // is infallible, so no HandleError wrapper is needed.
+        let backend = Backend::new(db.clone());
+        let auth_layer = AuthManagerLayerBuilder::new(backend, session_layer).build();
 
         let app = Router::new()
-            .route("/", get(home))
+            .merge(protected::router(self.state.clone()))
+            .route_layer(login_required!(Backend, login_url = "/login"))
+            .merge(auth::router())
             .route("/health", get(health))
             .nest_service("/assets", ServeDir::new("assets"))
-            .layer(TraceLayer::new_for_http())
-            .with_state(self.state.clone());
+            .layer(auth_layer)
+            .layer(TraceLayer::new_for_http());
 
         let addr = SocketAddr::from(([0, 0, 0, 0], port));
         tracing::info!(%addr, "listening");
