@@ -18,13 +18,14 @@ services:
       TS_AUTHKEY: ${TS_AUTHKEY:?set TS_AUTHKEY (a Tailscale auth key)}
       TS_STATE_DIR: /var/lib/tailscale
       TS_SERVE_CONFIG: /config/serve.json
-      TS_USERSPACE: "false"
+      # Userspace networking: `tailscale serve` terminates TLS in tailscaled's
+      # own netstack and proxies to 127.0.0.1:8080. This is the reliable way to
+      # serve in a container — it doesn't depend on kernel netfilter/netlink (which
+      # is often restricted/read-only under Coolify) and needs no NET_ADMIN or
+      # /dev/net/tun.
+      TS_USERSPACE: "true"
     volumes:
       - tailscale-state:/var/lib/tailscale
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    cap_add:
-      - NET_ADMIN
     restart: unless-stopped
 
   golf-booker:

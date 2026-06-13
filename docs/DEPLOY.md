@@ -155,6 +155,14 @@ preferred because it gives a clean hostname and real HTTPS.
   cookie. Use the HTTPS `ts.net` URL (not an IP), or set `COOKIE_SECURE=false`.
 - **DB resets on redeploy**: the `golf-data` volume isn't persisting — check the
   Coolify volume mapping to `/data`.
+- **`ERR_CONNECTION_REFUSED` on 443 while `:8080` works, even though
+  `tailscale serve status` looks right and `tailscale cert` succeeds**: the
+  container's kernel networking is restricted (you'll see `netlink … no such
+  file or directory` / `src_valid_mark … read-only file system` in the sidecar
+  log), so `tailscale serve` can't bind 443. The sidecar runs in **userspace
+  mode** (`TS_USERSPACE=true`) to avoid this — make sure you're on the current
+  compose and have redeployed. Direct `node:8080` stops working in userspace
+  mode (expected); use the clean `https://…ts.net` URL.
 - **App container restart-loops with the sidecar logging `serve config: ... is a
   directory`**: the Tailscale serve config is baked into the sidecar image
   (`tailscale/Dockerfile`), not bind-mounted, precisely to avoid this — make sure
