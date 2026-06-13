@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Golf Booker{% endblock %}</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+  <script src="/assets/vendor/htmx-2.0.4.min.js" defer></script>
+</head>
+<body>
+  {% block header %}{% endblock %}
+  <main class="wrapper region flow">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

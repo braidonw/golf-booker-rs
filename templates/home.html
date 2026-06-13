@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Golf Booker{% endblock %}
+{% block content %}
+<h1>Golf Booker</h1>
+<p>Scaffold is up and running.</p>
+<div class="card">
+  <p>
+    Scheduler mode:
+    {% if dry_run %}
+      <span class="badge" data-status="pending">dry-run</span>
+      (no real bookings will be made)
+    {% else %}
+      <span class="badge" data-status="completed">live</span>
+      (real bookings enabled)
+    {% endif %}
+  </p>
+</div>
+{% endblock %}

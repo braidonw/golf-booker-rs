@@ -1,0 +1,40 @@
+/* App-specific overrides (CUBE CSS "exception" layer). Survives `npm run css`. */
+
+:root {
+  --wrapper-max-width: 64rem;
+}
+
+/* Top navigation bar. */
+.site-header {
+  border-block-end: var(--border-width-thin, 1px) solid var(--color-surface-border);
+  background: var(--color-surface-raised);
+}
+.site-header a {
+  text-decoration: none;
+}
+.site-header__brand {
+  font-weight: var(--font-weight-bold, 700);
+  font-size: var(--text-lg, 1.125rem);
+}
+
+/* Status pills for scheduled jobs, layered on top of the badge component. */
+.badge[data-status="pending"]   { color: var(--color-warning-text, #92600a); }
+.badge[data-status="running"]   { color: var(--color-info-text, #1e5fbf); }
+.badge[data-status="completed"] { color: var(--color-success-text, #1a7f37); }
+.badge[data-status="failed"]    { color: var(--color-danger-text, #b3261e); }
+.badge[data-status="cancelled"] { color: var(--color-text-quiet); }
+
+/* Data tables. */
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+th, td {
+  text-align: start;
+  padding: var(--space-xs, 0.5rem) var(--space-sm, 1rem);
+  border-block-end: var(--border-width-thin, 1px) solid var(--color-surface-border);
+}
+th {
+  font-weight: var(--font-weight-medium, 600);
+  color: var(--color-text-quiet);
+}

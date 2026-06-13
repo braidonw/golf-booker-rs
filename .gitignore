@@ -1,0 +1,12 @@
+/target
+node_modules
+
+# Local DB and SQLite sidecars
+*.db
+*.db-shm
+*.db-wal
+
+# Secrets
+.env
+
+.DS_Store

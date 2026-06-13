@@ -1,0 +1,12 @@
+{
+  "name": "golf-booker-styles",
+  "private": true,
+  "description": "Sugarcube / CUBE CSS styling pipeline for golf-booker. Generates the static stylesheet served by the Rust app.",
+  "scripts": {
+    "css": "sugarcube generate --force --silent --variables assets/css/tokens.css --utilities assets/css/utilities.css && node build-css.mjs",
+    "css:watch": "sugarcube generate --watch --variables assets/css/tokens.css --utilities assets/css/utilities.css"
+  },
+  "devDependencies": {
+    "@sugarcube-sh/cli": "0.1.16"
+  }
+}
