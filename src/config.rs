@@ -10,6 +10,10 @@ pub struct Config {
     /// When true (the default), the scheduler simulates bookings instead of
     /// hitting the club. Set `DRY_RUN=false` to make real bookings.
     pub dry_run: bool,
+    /// Whether the session cookie carries the `Secure` attribute. True by
+    /// default (deployed behind TLS); set `COOKIE_SECURE=false` only for local
+    /// plain-HTTP development, where a `Secure` cookie would never be sent.
+    pub cookie_secure: bool,
 }
 
 impl Config {
@@ -27,10 +31,16 @@ impl Config {
             .map(|v| v != "false" && v != "0")
             .unwrap_or(true);
 
+        // Secure by default; only disabled explicitly for local HTTP dev.
+        let cookie_secure = std::env::var("COOKIE_SECURE")
+            .map(|v| v != "false" && v != "0")
+            .unwrap_or(true);
+
         Self {
             database_url,
             port,
             dry_run,
+            cookie_secure,
         }
     }
 }

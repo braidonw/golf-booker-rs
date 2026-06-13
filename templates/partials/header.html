@@ -5,7 +5,9 @@
       <a href="/">Home</a>
       <a href="/clubs">Clubs</a>
       <a href="/scheduled-jobs">Scheduled</a>
-      <a href="/logout">Sign out ({{ username }})</a>
+      <form method="post" action="/logout" class="logout-form">
+        <button type="submit" class="link-button">Sign out ({{ username }})</button>
+      </form>
     </nav>
   </div>
 </header>

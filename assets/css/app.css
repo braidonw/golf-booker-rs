@@ -17,6 +17,23 @@
   font-size: var(--text-lg, 1.125rem);
 }
 
+/* A button that reads as a nav link (used for the POST logout form). */
+.logout-form {
+  display: inline;
+  margin: 0;
+}
+.link-button {
+  appearance: none;
+  border: 0;
+  padding: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+  color: var(--color-text-link, currentColor);
+  text-decoration: underline;
+  text-underline-offset: 0.25em;
+}
+
 /* Status pills for scheduled jobs, layered on top of the badge component. */
 .badge[data-status="pending"]   { color: var(--color-warning-text, #92600a); }
 .badge[data-status="running"]   { color: var(--color-info-text, #1e5fbf); }

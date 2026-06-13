@@ -13,7 +13,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
-use tower_sessions::cookie::time::Duration;
+use tower_sessions::cookie::{time::Duration, SameSite};
 use tower_sessions_sqlx_store::SqliteStore;
 
 use super::{auth, protected};
@@ -56,7 +56,9 @@ impl App {
         let session_store = SqliteStore::new(db.clone());
         session_store.migrate().await?;
         let session_layer = SessionManagerLayer::new(session_store)
-            .with_secure(false) // behind Tailscale/Coolify TLS termination
+            .with_secure(self.state.config.cookie_secure)
+            .with_http_only(true)
+            .with_same_site(SameSite::Lax)
             .with_expiry(Expiry::OnInactivity(Duration::days(7)));
 
         // Auth layer: combines sessions with our credential backend. The layer

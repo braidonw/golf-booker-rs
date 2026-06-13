@@ -4,6 +4,14 @@ use axum_login::{AuthUser, AuthnBackend, UserId};
 use password_auth::{generate_hash, verify_password};
 use serde::Deserialize;
 use sqlx::{FromRow, SqlitePool};
+use std::sync::OnceLock;
+
+/// A fixed Argon2 hash used to spend constant time verifying credentials when no
+/// matching user exists, defeating username-enumeration timing attacks.
+fn dummy_hash() -> &'static str {
+    static HASH: OnceLock<String> = OnceLock::new();
+    HASH.get_or_init(|| generate_hash("constant-time-placeholder"))
+}
 
 /// A login account for the app (a family member). Distinct from a golf *club*
 /// login, which lives in the `clubs` table.
@@ -75,8 +83,15 @@ impl AuthnBackend for Backend {
             .await?;
 
         // Argon2 verification is CPU-bound, so keep it off the async runtime.
-        let user = tokio::task::spawn_blocking(move || {
-            user.filter(|user| verify_password(&creds.password, &user.password).is_ok())
+        let user = tokio::task::spawn_blocking(move || match user {
+            Some(user) if verify_password(&creds.password, &user.password).is_ok() => Some(user),
+            // Verify against a fixed dummy hash even when the user is absent or
+            // the password is wrong, so response timing doesn't reveal whether
+            // the username exists.
+            _ => {
+                let _ = verify_password(&creds.password, dummy_hash());
+                None
+            }
         })
         .await
         .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
