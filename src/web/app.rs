@@ -16,7 +16,7 @@ use tower_http::trace::TraceLayer;
 use tower_sessions::cookie::{time::Duration, SameSite};
 use tower_sessions_sqlx_store::SqliteStore;
 
-use super::{auth, clubs, protected};
+use super::{auth, clubs, events, protected};
 
 /// Shared application state handed to every request handler.
 pub struct AppState {
@@ -71,6 +71,7 @@ impl App {
         let app = Router::new()
             .merge(protected::router(self.state.clone()))
             .merge(clubs::router(self.state.clone()))
+            .merge(events::router(self.state.clone()))
             .route_layer(login_required!(Backend, login_url = "/login"))
             .merge(auth::router())
             .route("/health", get(health))

@@ -17,7 +17,6 @@ pub struct Club {
     /// IANA timezone the club books in (e.g. `Australia/Sydney`). Tee sheets
     /// open at local time, so scheduling is interpreted/displayed in this zone.
     pub timezone: String,
-    pub created_at: String,
 }
 
 // Manual Debug so credentials never end up in logs.
@@ -35,15 +34,7 @@ impl std::fmt::Debug for Club {
     }
 }
 
-impl Club {
-    /// The club's timezone, falling back to UTC if the stored value is somehow
-    /// invalid (creation/update validate it, so this is belt-and-braces).
-    pub fn tz(&self) -> chrono_tz::Tz {
-        self.timezone.parse().unwrap_or(chrono_tz::UTC)
-    }
-}
-
-const COLUMNS: &str = "id, name, base_url, username, password, member_id, timezone, created_at";
+const COLUMNS: &str = "id, name, base_url, username, password, member_id, timezone";
 
 pub async fn list(db: &SqlitePool) -> Result<Vec<Club>, sqlx::Error> {
     sqlx::query_as(&format!("SELECT {COLUMNS} FROM clubs ORDER BY name"))

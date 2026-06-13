@@ -1,6 +1,7 @@
 mod app;
 mod auth;
 mod clubs;
+mod events;
 mod protected;
 mod render;
 

@@ -16,11 +16,17 @@ mod get {
     use super::*;
     use axum::{extract::State, response::IntoResponse};
 
+    struct ClubLink {
+        id: i64,
+        name: String,
+    }
+
     #[derive(Template)]
     #[template(path = "home.html")]
     struct HomeTemplate {
         username: String,
         dry_run: bool,
+        clubs: Vec<ClubLink>,
     }
 
     pub async fn index(
@@ -33,9 +39,19 @@ mod get {
             .map(|u| u.username)
             .unwrap_or_else(|| "?".to_string());
 
+        let clubs = crate::clubs::list(&state.db)
+            .await?
+            .into_iter()
+            .map(|c| ClubLink {
+                id: c.id,
+                name: c.name,
+            })
+            .collect();
+
         Ok(render(&HomeTemplate {
             username,
             dry_run: state.config.dry_run,
+            clubs,
         })?
         .into_response())
     }

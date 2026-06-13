@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}{{ club_name }} · Tee sheets{% endblock %}
+{% block header %}{% include "partials/header.html" %}{% endblock %}
+{% block content %}
+<h1>{{ club_name }} — tee sheets</h1>
+
+{% if clubs.len() > 1 %}
+  <nav class="cluster" style="--cluster-gap: var(--space-sm);" aria-label="Switch club">
+    <span>Club:</span>
+    {% for club in clubs %}
+      {% if club.id == club_id %}
+        <strong aria-current="page">{{ club.name }}</strong>
+      {% else %}
+        <a href="/clubs/{{ club.id }}/events">{{ club.name }}</a>
+      {% endif %}
+    {% endfor %}
+  </nav>
+{% endif %}
+
+{% if let Some(error) = error %}
+  <p class="alert" data-variant="danger" role="alert">Couldn't load events: {{ error }}</p>
+{% endif %}
+
+{% if events.is_empty() %}
+  {% if error.is_none() %}<p>No events in the next couple of months.</p>{% endif %}
+{% else %}
+  <table>
+    <thead>
+      <tr><th>Date</th><th>Event</th><th>Status</th><th>Availability</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for event in events %}
+        <tr>
+          <td>{{ event.event_date.format("%a %d %b %Y") }}</td>
+          <td>{{ event.title }}</td>
+          <td>
+            {% if event.is_open %}<span class="badge" data-status="completed">Open</span>
+            {% else %}<span class="badge" data-status="pending">{{ event.status() }}</span>{% endif %}
+          </td>
+          <td>{{ event.availability }}</td>
+          <td><a href="/clubs/{{ club_id }}/events/{{ event.id }}">View sheet</a></td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endif %}
+{% endblock %}

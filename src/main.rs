@@ -4,6 +4,7 @@ mod clubs;
 mod config;
 mod db;
 mod error;
+mod golf;
 mod users;
 mod web;
 
