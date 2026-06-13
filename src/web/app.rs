@@ -1,6 +1,7 @@
 //! HTTP application wiring: state, router, server.
 
 use crate::config::Config;
+use crate::email::Mailer;
 use crate::scheduler::JobScheduler;
 use crate::users::Backend;
 use axum::{routing::get, Router};
@@ -17,13 +18,14 @@ use tower_http::trace::TraceLayer;
 use tower_sessions::cookie::{time::Duration, SameSite};
 use tower_sessions_sqlx_store::SqliteStore;
 
-use super::{auth, clubs, events, jobs, protected};
+use super::{auth, clubs, events, jobs, protected, users};
 
 /// Shared application state handed to every request handler.
 pub struct AppState {
     pub db: SqlitePool,
     pub config: Config,
     pub scheduler: JobScheduler,
+    pub mailer: Mailer,
 }
 
 /// Owns startup-time resources before the server is launched.
@@ -47,13 +49,20 @@ impl App {
         crate::users::seed_from_environment(&db).await?;
         crate::clubs::seed_from_environment(&db).await?;
 
-        let scheduler = JobScheduler::new(db.clone(), config.dry_run);
+        let mailer = Mailer::from_config(config.smtp.as_ref())?;
+        let scheduler = JobScheduler::new(
+            db.clone(),
+            config.dry_run,
+            mailer.clone(),
+            config.base_url.clone(),
+        );
 
         Ok(Self {
             state: Arc::new(AppState {
                 db,
                 config,
                 scheduler,
+                mailer,
             }),
         })
     }
@@ -84,8 +93,9 @@ impl App {
             .merge(clubs::router(self.state.clone()))
             .merge(events::router(self.state.clone()))
             .merge(jobs::router(self.state.clone()))
+            .merge(users::router(self.state.clone()))
             .route_layer(login_required!(Backend, login_url = "/login"))
-            .merge(auth::router())
+            .merge(auth::router(self.state.clone()))
             .route("/health", get(health))
             .nest_service("/assets", ServeDir::new("assets"))
             .layer(auth_layer)

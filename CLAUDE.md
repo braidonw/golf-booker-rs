@@ -51,7 +51,8 @@ Request flow: `main.rs` → `web::App::new()` (config, DB+migrations, user seedi
   Auth is axum-login 0.18 + tower-sessions with a **SQLite session store**, so
   sessions survive restarts. Passwords are argon2 (`password-auth`), verified on
   a blocking thread; the user-absent path still verifies against a dummy hash to
-  avoid timing-based username enumeration.
+  avoid timing-based username enumeration. Accounts are managed at `/users`;
+  passwords reset via emailed single-use tokens (`/forgot`, `/reset`).
 - *Club logins* (`clubs` table, `src/clubs.rs`): credentials for each golf club,
   stored centrally (single operator). Stored **plaintext** because they must be
   replayed to the club on login — treat the whole row as a secret. Both `User`
@@ -68,6 +69,11 @@ layer is infallible — do **not** wrap it in `HandleErrorLayer` (it breaks the
 club, each with its own cookie jar, built from a `Club` row via
 `GolfClient::from_club`. Talks to MiClub-style endpoints (Spring URLs; responses
 are a mix of JSON and XML parsed with serde / quick-xml).
+
+**Email** (`src/email.rs`): a `Mailer` over lettre (SMTP, Fastmail by default,
+rustls). Optional — with no SMTP config it's disabled and callers fall back
+(reset links get logged, notifications skipped). Sends password-reset links and
+booking-outcome notifications. Links use `config.base_url` (`APP_BASE_URL`).
 
 **Scheduler** (`src/scheduler/`, added in Phase 4) is the heart of the app. A
 dispatcher polls for jobs whose firing time is near, atomically claims each

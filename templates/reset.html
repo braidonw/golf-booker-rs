@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Set a new password · Golf Booker{% endblock %}
+{% block content %}
+<div class="card flow" style="max-width: 24rem; margin-inline: auto;">
+  <h1>Set a new password</h1>
+
+  {% if let Some(message) = message %}
+    <p class="alert" data-variant="{% if done %}success{% else %}danger{% endif %}" role="alert">{{ message }}</p>
+  {% endif %}
+
+  {% if done %}
+    <p><a class="button" href="/login">Sign in</a></p>
+  {% else %}
+    <form method="post" action="/reset" class="flow">
+      <input type="hidden" name="token" value="{{ token }}">
+      <label>
+        New password
+        <input class="input" type="password" name="password" autocomplete="new-password" minlength="8" required autofocus>
+      </label>
+      <button class="button" type="submit">Update password</button>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}

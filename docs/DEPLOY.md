@@ -44,7 +44,23 @@ mark the secrets as such):
 | `APP_PASSWORD` | ✅ (first boot) | your login password — seeds the first account on an empty DB |
 | `DRY_RUN` | – | defaults `true` (simulates bookings); set `false` to book for real |
 | `COOKIE_SECURE` | – | defaults `true`; leave on (Tailscale Serve gives HTTPS) |
+| `APP_BASE_URL` | recommended | your `https://golf-booker.<tailnet>.ts.net` URL — used in email links |
+| `APP_EMAIL` | – | email for the seeded account (password reset + notifications) |
+| `SMTP_HOST/PORT/USERNAME/PASSWORD/FROM` | for email | Fastmail SMTP; enables password-reset + booking-notification emails (see below) |
 | `RIDGE_*` / `NSW_*` | – | optional club seeding (see `.env.example`); clubs can also be added in the UI |
+
+### Email (password reset + booking notifications)
+
+Set the `SMTP_*` vars to send email from your Fastmail account. Create a Fastmail
+**app password** (Fastmail → Settings → Password & Security → App passwords) with
+SMTP access — don't use your main password. Defaults: `smtp.fastmail.com:465`
+(implicit TLS). Set `APP_BASE_URL` so reset links point at your `ts.net` URL.
+
+With SMTP unset, the app still runs: password-reset links are written to the logs
+instead of emailed, and booking notifications are skipped.
+
+Manage accounts in the app at **/users** (add/remove family members); they can
+reset their own password via the "Forgot password?" link.
 
 Two named volumes are declared and persist across redeploys:
 

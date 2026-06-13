@@ -3,6 +3,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 mod clubs;
 mod config;
 mod db;
+mod email;
 mod error;
 mod golf;
 mod scheduler;

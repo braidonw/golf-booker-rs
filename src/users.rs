@@ -1,10 +1,16 @@
 //! Application login accounts and the axum-login authentication backend.
 
 use axum_login::{AuthUser, AuthnBackend, UserId};
+use chrono::{DateTime, Duration, Utc};
 use password_auth::{generate_hash, verify_password};
+use rand::RngCore;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use sqlx::{FromRow, SqlitePool};
 use std::sync::OnceLock;
+
+/// How long a password-reset link stays valid.
+const RESET_TOKEN_TTL_HOURS: i64 = 1;
 
 /// A fixed Argon2 hash used to spend constant time verifying credentials when no
 /// matching user exists, defeating username-enumeration timing attacks.
@@ -21,6 +27,7 @@ pub struct User {
     pub username: String,
     /// Argon2 hash of the account password.
     password: String,
+    pub email: Option<String>,
 }
 
 // Manual Debug so the password hash never lands in logs.
@@ -30,6 +37,7 @@ impl std::fmt::Debug for User {
             .field("id", &self.id)
             .field("username", &self.username)
             .field("password", &"[redacted]")
+            .field("email", &self.email)
             .finish()
     }
 }
@@ -120,18 +128,144 @@ pub async fn any_exist(db: &SqlitePool) -> Result<bool, sqlx::Error> {
 
 /// Create a login account with the given plaintext password (hashed before
 /// storage). Returns the new user's id.
-pub async fn create(db: &SqlitePool, username: &str, password: &str) -> Result<i64, sqlx::Error> {
+pub async fn create(
+    db: &SqlitePool,
+    username: &str,
+    email: Option<&str>,
+    password: &str,
+) -> Result<i64, sqlx::Error> {
     let hash = generate_hash(password);
-    let result = sqlx::query("INSERT INTO users (username, password) VALUES (?, ?)")
+    let result = sqlx::query("INSERT INTO users (username, email, password) VALUES (?, ?, ?)")
         .bind(username)
+        .bind(email)
         .bind(hash)
         .execute(db)
         .await?;
     Ok(result.last_insert_rowid())
 }
 
-/// Seed the first login account from `APP_USERNAME` / `APP_PASSWORD` if the
-/// users table is empty. No-op if either var is missing or users already exist.
+/// A login account rendered to the management UI (no password).
+#[derive(FromRow)]
+pub struct UserRow {
+    pub id: i64,
+    pub username: String,
+    pub email: Option<String>,
+}
+
+pub async fn list(db: &SqlitePool) -> Result<Vec<UserRow>, sqlx::Error> {
+    sqlx::query_as("SELECT id, username, email FROM users ORDER BY username")
+        .fetch_all(db)
+        .await
+}
+
+pub async fn count(db: &SqlitePool) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar("SELECT COUNT(*) FROM users")
+        .fetch_one(db)
+        .await
+}
+
+pub async fn delete(db: &SqlitePool, user_id: i64) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM users WHERE id = ?")
+        .bind(user_id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+/// Set a new password (hashed). Note: this changes `session_auth_hash`, so it
+/// invalidates the user's existing sessions.
+pub async fn set_password(
+    db: &SqlitePool,
+    user_id: i64,
+    new_password: &str,
+) -> Result<(), sqlx::Error> {
+    let hash = generate_hash(new_password);
+    sqlx::query("UPDATE users SET password = ? WHERE id = ?")
+        .bind(hash)
+        .bind(user_id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+/// The user id owning an email address, if any.
+pub async fn id_for_email(db: &SqlitePool, email: &str) -> Result<Option<i64>, sqlx::Error> {
+    sqlx::query_scalar("SELECT id FROM users WHERE email = ?")
+        .bind(email)
+        .fetch_optional(db)
+        .await
+}
+
+/// A user's email address, if set.
+pub async fn email_for(db: &SqlitePool, user_id: i64) -> Result<Option<String>, sqlx::Error> {
+    let email: Option<Option<String>> = sqlx::query_scalar("SELECT email FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_optional(db)
+        .await?;
+    Ok(email.flatten())
+}
+
+fn hash_token(raw: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(raw.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+/// Create a single-use password-reset token for a user. Returns the raw token
+/// (only the hash is stored); embed it in the emailed link.
+pub async fn create_reset_token(db: &SqlitePool, user_id: i64) -> Result<String, sqlx::Error> {
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    let raw = hex::encode(bytes);
+    let expires = (Utc::now() + Duration::hours(RESET_TOKEN_TTL_HOURS)).to_rfc3339();
+
+    sqlx::query(
+        "INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES (?, ?, ?)",
+    )
+    .bind(user_id)
+    .bind(hash_token(&raw))
+    .bind(expires)
+    .execute(db)
+    .await?;
+    Ok(raw)
+}
+
+/// Redeem a reset token: if valid, unused, and unexpired, mark it used and
+/// return the user id. Atomic against double-use.
+pub async fn consume_reset_token(db: &SqlitePool, raw: &str) -> Result<Option<i64>, sqlx::Error> {
+    let hash = hash_token(raw);
+    let row: Option<(i64, i64, String)> = sqlx::query_as(
+        "SELECT id, user_id, expires_at FROM password_reset_tokens \
+         WHERE token_hash = ? AND used_at IS NULL",
+    )
+    .bind(&hash)
+    .fetch_optional(db)
+    .await?;
+
+    let Some((token_id, user_id, expires_at)) = row else {
+        return Ok(None);
+    };
+    let expired = DateTime::parse_from_rfc3339(&expires_at)
+        .map(|e| Utc::now() > e.with_timezone(&Utc))
+        .unwrap_or(true);
+    if expired {
+        return Ok(None);
+    }
+
+    // Mark used; rows_affected == 0 means another request beat us to it.
+    let result = sqlx::query(
+        "UPDATE password_reset_tokens SET used_at = ? WHERE id = ? AND used_at IS NULL",
+    )
+    .bind(Utc::now().to_rfc3339())
+    .bind(token_id)
+    .execute(db)
+    .await?;
+
+    Ok((result.rows_affected() == 1).then_some(user_id))
+}
+
+/// Seed the first login account from `APP_USERNAME` / `APP_PASSWORD` (+ optional
+/// `APP_EMAIL`) if the users table is empty.
 pub async fn seed_from_environment(db: &SqlitePool) -> anyhow::Result<()> {
     if any_exist(db).await? {
         return Ok(());
@@ -145,8 +279,22 @@ pub async fn seed_from_environment(db: &SqlitePool) -> anyhow::Result<()> {
         );
         return Ok(());
     };
+    let email = std::env::var("APP_EMAIL").ok();
 
-    create(db, &username, &password).await?;
+    create(db, &username, email.as_deref(), &password).await?;
     tracing::info!(%username, "seeded initial login account from environment");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn token_hash_is_stable_and_distinct() {
+        assert_eq!(hash_token("abc"), hash_token("abc"));
+        assert_ne!(hash_token("abc"), hash_token("abd"));
+        // SHA-256 hex is 64 chars.
+        assert_eq!(hash_token("abc").len(), 64);
+    }
 }

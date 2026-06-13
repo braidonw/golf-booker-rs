@@ -37,6 +37,18 @@ chrono-tz = "0.10"
 anyhow = "1"
 thiserror = "2"
 dotenvy = "0.15"
+
+# Email (Fastmail SMTP) + reset-token crypto
+lettre = { version = "0.11", default-features = false, features = [
+    "builder",
+    "smtp-transport",
+    "pool",
+    "tokio1",
+    "tokio1-rustls-tls",
+] }
+rand = "0.8"
+sha2 = "0.10"
+hex = "0.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 html-escape = "0.2"

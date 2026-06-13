@@ -37,13 +37,19 @@ the sqlx session store pins sqlx 0.8. Don't bump one in isolation.
 - [x] **6 — Polish.** Login rate-limiting (per-username, in-memory), booking
       error classification (terminal failures stop the retry loop), scheduler
       timing tests, warning-free build.
+- [x] **7 — Users & email.** User management UI (`/users`), email-based password
+      reset (single-use hashed tokens), and booking-outcome notification emails,
+      all over Fastmail SMTP (lettre) with graceful disable when unconfigured.
 
 ## Deferred / follow-ups
 
 - **Live-club smoke test**: the login/book POST and event/sheet parsing are only
   exercised against a mock. Verify against the real club (add it, browse, then
   one real `DRY_RUN=false` booking) before relying on a scheduled job.
+- **Live email send**: the reset/notification *content and fallbacks* are tested,
+  but actual SMTP delivery needs real Fastmail credentials — send one test.
 - Encrypt club credentials at rest (currently plaintext by necessity).
-- Change-password / add-user UI (accounts are env-seeded for now).
+- Terminal booking errors still consume `max_attempts` re-arms before failing
+  (the retry-loop classification works; cross-attempt short-circuit is a TODO).
 - Per-IP rate limiting only becomes meaningful if exposed beyond the tailnet
   (behind the Tailscale proxy every request shares one source IP).

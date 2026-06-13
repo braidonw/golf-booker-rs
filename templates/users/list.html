@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Users · Golf Booker{% endblock %}
+{% block header %}{% include "partials/header.html" %}{% endblock %}
+{% block content %}
+<h1>Users</h1>
+
+{% if let Some(error) = error %}
+  <p class="alert" data-variant="danger" role="alert">{{ error }}</p>
+{% endif %}
+
+<table>
+  <thead>
+    <tr><th>Username</th><th>Email</th><th></th></tr>
+  </thead>
+  <tbody>
+    {% for user in users %}
+      <tr>
+        <td>{{ user.username }}{% if user.is_self %} <small>(you)</small>{% endif %}</td>
+        <td>{{ user.email }}</td>
+        <td>
+          {% if !user.is_self %}
+            <form method="post" action="/users/{{ user.id }}/delete"
+                  hx-post="/users/{{ user.id }}/delete"
+                  hx-target="closest tr" hx-swap="outerHTML"
+                  hx-confirm="Delete {{ user.username }}?" class="logout-form">
+              <button class="link-button" type="submit">Delete</button>
+            </form>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<div class="card flow" style="margin-block-start: var(--space-lg);">
+  <h2>Add a user</h2>
+  <p>They can sign in with this password, or reset it later via the email link.</p>
+  <form method="post" action="/users" class="flow">
+    <label>Username <input class="input" type="text" name="username" required></label>
+    <label>Email <input class="input" type="email" name="email" required></label>
+    <label>Initial password <input class="input" type="password" name="password" autocomplete="new-password" required></label>
+    <button class="button" type="submit">Add user</button>
+  </form>
+</div>
+{% endblock %}

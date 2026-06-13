@@ -5,6 +5,7 @@
 //! then books with rapid retries. Times are stored in UTC; the web layer
 //! converts to/from each club's local timezone.
 
+use crate::email::Mailer;
 use crate::golf::GolfClient;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -115,11 +116,19 @@ pub struct JobScheduler {
     db: SqlitePool,
     /// When true, jobs are simulated (logged) instead of hitting the club.
     dry_run: bool,
+    mailer: Mailer,
+    /// Public base URL for links in notification emails.
+    base_url: String,
 }
 
 impl JobScheduler {
-    pub fn new(db: SqlitePool, dry_run: bool) -> Self {
-        Self { db, dry_run }
+    pub fn new(db: SqlitePool, dry_run: bool, mailer: Mailer, base_url: String) -> Self {
+        Self {
+            db,
+            dry_run,
+            mailer,
+            base_url,
+        }
     }
 
     /// Spawn the background dispatcher loop. Returns immediately.
@@ -132,10 +141,12 @@ impl JobScheduler {
 
         let db = self.db.clone();
         let dry_run = self.dry_run;
+        let mailer = self.mailer.clone();
+        let base_url = self.base_url.clone();
         tokio::spawn(async move {
             info!(dry_run, "job scheduler started");
             loop {
-                if let Err(e) = dispatch_due_jobs(&db, dry_run).await {
+                if let Err(e) = dispatch_due_jobs(&db, dry_run, &mailer, &base_url).await {
                     error!("error dispatching jobs: {e}");
                 }
                 sleep(POLL_INTERVAL).await;
@@ -221,7 +232,12 @@ async fn requeue_stranded_jobs(db: &SqlitePool) -> Result<(), sqlx::Error> {
 
 /// Find jobs near their firing moment, claim each, and spawn a task to fire it.
 /// The dispatcher never blocks on a job — it claims and hands off.
-async fn dispatch_due_jobs(db: &SqlitePool, dry_run: bool) -> Result<(), sqlx::Error> {
+async fn dispatch_due_jobs(
+    db: &SqlitePool,
+    dry_run: bool,
+    mailer: &Mailer,
+    base_url: &str,
+) -> Result<(), sqlx::Error> {
     let arm_horizon = (Utc::now() + chrono::Duration::seconds(ARM_WINDOW_SECS)).to_rfc3339();
 
     let armable: Vec<ScheduledJob> = sqlx::query_as(
@@ -238,8 +254,10 @@ async fn dispatch_due_jobs(db: &SqlitePool, dry_run: bool) -> Result<(), sqlx::E
             continue;
         }
         let db = db.clone();
+        let mailer = mailer.clone();
+        let base_url = base_url.to_string();
         tokio::spawn(async move {
-            arm_and_run_job(&db, dry_run, job).await;
+            arm_and_run_job(&db, dry_run, &mailer, &base_url, job).await;
         });
     }
     Ok(())
@@ -259,7 +277,13 @@ async fn claim_job(db: &SqlitePool, job_id: i64) -> Result<bool, sqlx::Error> {
 
 /// Arm a claimed job: resolve its club, pre-authenticate, sleep to the moment,
 /// fire with rapid retry, and record the outcome.
-async fn arm_and_run_job(db: &SqlitePool, dry_run: bool, job: ScheduledJob) {
+async fn arm_and_run_job(
+    db: &SqlitePool,
+    dry_run: bool,
+    mailer: &Mailer,
+    base_url: &str,
+    job: ScheduledJob,
+) {
     let target = match job.scheduled_time() {
         Ok(t) => t,
         Err(e) => return fail_job(db, job.id, format!("invalid scheduled_time: {e}")).await,
@@ -273,8 +297,8 @@ async fn arm_and_run_job(db: &SqlitePool, dry_run: bool, job: ScheduledJob) {
     let Some(club_id) = job.club_id else {
         return fail_job(db, job.id, "club was removed".to_string()).await;
     };
-    let client = match crate::clubs::get(db, club_id).await {
-        Ok(Some(club)) => GolfClient::from_club(&club),
+    let (client, club_name) = match crate::clubs::get(db, club_id).await {
+        Ok(Some(club)) => (GolfClient::from_club(&club), club.name),
         Ok(None) => return fail_job(db, job.id, format!("club {club_id} not found")).await,
         Err(e) => return fail_job(db, job.id, format!("failed to load club {club_id}: {e}")).await,
     };
@@ -286,16 +310,92 @@ async fn arm_and_run_job(db: &SqlitePool, dry_run: bool, job: ScheduledJob) {
             info!("job {} completed", job.id);
             let _ = set_status(db, job.id, JobStatus::Completed, None).await;
             let _ = mark_completed(db, job.id).await;
+            notify(
+                db,
+                mailer,
+                base_url,
+                &job,
+                &club_name,
+                &booking,
+                dry_run,
+                Ok(()),
+            )
+            .await;
         }
         Err(e) => {
             let msg = e.to_string();
             if job.attempts + 1 >= job.max_attempts {
                 let _ = set_status(db, job.id, JobStatus::Failed, Some(&msg)).await;
+                notify(
+                    db,
+                    mailer,
+                    base_url,
+                    &job,
+                    &club_name,
+                    &booking,
+                    dry_run,
+                    Err(msg),
+                )
+                .await;
             } else {
                 // Back to pending so the dispatcher re-arms it on a later tick.
+                // No email yet — it'll retry.
                 let _ = increment_attempts(db, job.id, &msg).await;
             }
         }
+    }
+}
+
+/// Email the scheduling user about a final booking outcome, if they have an
+/// address and the mailer is enabled.
+#[allow(clippy::too_many_arguments)]
+async fn notify(
+    db: &SqlitePool,
+    mailer: &Mailer,
+    base_url: &str,
+    job: &ScheduledJob,
+    club_name: &str,
+    booking: &BookingJobData,
+    dry_run: bool,
+    outcome: Result<(), String>,
+) {
+    let email = match crate::users::email_for(db, job.user_id).await {
+        Ok(Some(e)) => e,
+        Ok(None) => return,
+        Err(e) => {
+            warn!(
+                "notify: failed to look up email for user {}: {e}",
+                job.user_id
+            );
+            return;
+        }
+    };
+
+    let prefix = if dry_run { "[DRY RUN] " } else { "" };
+    let (subject, detail) = match &outcome {
+        Ok(()) if dry_run => (
+            format!("{prefix}Would have booked at {club_name}"),
+            "Dry run — no real booking was made.".to_string(),
+        ),
+        Ok(()) => (
+            format!("✅ Booked at {club_name}"),
+            "Your scheduled booking went through.".to_string(),
+        ),
+        Err(reason) => (
+            format!("{prefix}❌ Booking failed at {club_name}"),
+            format!("Your scheduled booking did not go through.\nReason: {reason}"),
+        ),
+    };
+
+    let body = format!(
+        "{detail}\n\nClub: {club_name}\nEvent: {}\nBooking group: {}\n\nView your bookings: {base_url}/scheduled-jobs\n",
+        booking.event_id, booking.booking_group_id,
+    );
+
+    match mailer.send(&email, &subject, body).await {
+        Ok(true) => info!(job_id = job.id, "sent booking notification"),
+        Ok(false) => {} // mailer disabled
+        Err(e) => warn!(job_id = job.id, "failed to send booking notification: {e}"),
     }
 }
 

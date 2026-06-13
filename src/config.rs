@@ -14,6 +14,45 @@ pub struct Config {
     /// default (deployed behind TLS); set `COOKIE_SECURE=false` only for local
     /// plain-HTTP development, where a `Secure` cookie would never be sent.
     pub cookie_secure: bool,
+    /// Public base URL used to build links in emails (e.g. the `ts.net` URL).
+    pub base_url: String,
+    /// SMTP settings for outbound email; `None` disables email features.
+    pub smtp: Option<SmtpConfig>,
+}
+
+/// Outbound SMTP configuration (Fastmail by default).
+#[derive(Debug, Clone)]
+pub struct SmtpConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    /// `From:` address (typically your Fastmail address).
+    pub from: String,
+}
+
+impl SmtpConfig {
+    /// Build from env if the required vars are present. Host/port default to
+    /// Fastmail's submission endpoint.
+    fn from_env() -> Option<Self> {
+        let (username, password, from) = (
+            std::env::var("SMTP_USERNAME").ok()?,
+            std::env::var("SMTP_PASSWORD").ok()?,
+            std::env::var("SMTP_FROM").ok()?,
+        );
+        let host = std::env::var("SMTP_HOST").unwrap_or_else(|_| "smtp.fastmail.com".to_string());
+        let port = std::env::var("SMTP_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(465);
+        Some(Self {
+            host,
+            port,
+            username,
+            password,
+            from,
+        })
+    }
 }
 
 impl Config {
@@ -36,11 +75,18 @@ impl Config {
             .map(|v| v != "false" && v != "0")
             .unwrap_or(true);
 
+        let base_url = std::env::var("APP_BASE_URL")
+            .unwrap_or_else(|_| format!("http://localhost:{port}"))
+            .trim_end_matches('/')
+            .to_string();
+
         Self {
             database_url,
             port,
             dry_run,
             cookie_secure,
+            base_url,
+            smtp: SmtpConfig::from_env(),
         }
     }
 }
