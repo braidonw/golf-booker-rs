@@ -3,34 +3,36 @@
 {% block header %}{% include "partials/header.html" %}{% endblock %}
 {% block content %}
 <h1>Welcome, {{ username }}</h1>
-<p>Browse clubs, book a slot, or schedule a booking for the moment a sheet opens.</p>
+<p class="lede">Browse a club's tee sheets to book a slot — or schedule one for the moment a sheet opens.</p>
 
-<div class="card">
-  <p>
-    Scheduler mode:
-    {% if dry_run %}
-      <span class="badge" data-status="pending">dry-run</span>
-      — no real bookings will be made.
-    {% else %}
-      <span class="badge" data-status="completed">live</span>
-      — real bookings enabled.
-    {% endif %}
-  </p>
-</div>
+<p class="scheduler-mode">
+  Scheduler mode
+  {% if dry_run %}
+    <span class="badge" data-status="pending">dry-run</span> — no real bookings will be made.
+  {% else %}
+    <span class="badge" data-status="completed">live</span> — real bookings enabled.
+  {% endif %}
+</p>
 
-<h2>Browse tee sheets</h2>
+<h2>Your clubs</h2>
 {% if clubs.is_empty() %}
-  <p>No clubs configured yet. <a href="/clubs">Add a club</a> to start browsing.</p>
+  <a class="add-club" href="/clubs">+ Add a club</a>
 {% else %}
-  <ul class="flow" style="--flow-space: var(--space-2xs);">
+  <div class="flow">
     {% for club in clubs %}
-      <li><a href="/clubs/{{ club.id }}/events">{{ club.name }}</a></li>
+      <div class="card flow">
+        <div>
+          <div style="font-size: var(--text-lg); font-weight: 800;">{{ club.name }}</div>
+          <div class="club-card__meta">{{ club.base_url }} · {{ club.timezone }}</div>
+        </div>
+        <div class="cluster" style="--cluster-gap: var(--space-2xs);">
+          <a class="button" href="/clubs/{{ club.id }}/events">View tee sheets</a>
+          <a class="button" data-variant="secondary" href="/scheduled-jobs">Scheduled bookings</a>
+          <a class="button" data-variant="secondary" href="/clubs/{{ club.id }}/edit">Edit</a>
+        </div>
+      </div>
     {% endfor %}
-  </ul>
+    <a class="add-club" href="/clubs">+ Add a club</a>
+  </div>
 {% endif %}
-
-<div class="cluster" style="--cluster-gap: var(--space-sm);">
-  <a class="button" href="/clubs">Manage clubs</a>
-  <a class="button" href="/scheduled-jobs">Scheduled bookings</a>
-</div>
 {% endblock %}

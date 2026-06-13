@@ -1,10 +1,64 @@
-/* App-specific overrides (CUBE CSS "exception" layer). Survives `npm run css`. */
+/* App overrides + blocks (CUBE CSS "exception"/block layer; survives `npm run css`).
+ *
+ * Re-skins the generated Sugarcube neutral palette to the Golf Booker design:
+ * a warm cream canvas, white cards, near-black primary actions, rounded status
+ * pills, and lists rendered as clean carded rows. Most of the look comes from
+ * overriding the semantic design tokens below; the rest is a handful of blocks.
+ */
 
+/* ---------- Palette & shape (override the generated neutrals) ---------- */
 :root {
-  --wrapper-max-width: 64rem;
+  /* Surfaces */
+  --color-surface-default: #f4f4f2; /* page canvas */
+  --color-surface-raised: #ffffff;  /* cards, header */
+  --color-surface-border: #e6e6e3;
+  --panel-border-color: #e6e6e3;
+
+  /* Text */
+  --color-text-normal: #1c1c1c;
+  --color-text-quiet: #6b6b66;
+  --color-text-quieter: #9a9a95;
+  --color-text-link: #1f1f1f;
+
+  /* Near-black primary actions / dark accents */
+  --color-fill-loud: #1f1f1f;
+  --color-on-loud: #ffffff;
+
+  /* Shape */
+  --panel-radius: 14px;
+  --form-control-radius: 10px;
+  --form-control-border-color: #e6e6e3;
+  --form-control-background-color: #ffffff;
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.04);
+
+  /* The design centres content at ~880px */
+  --wrapper-max-width: 55rem;
+
+  /* App accents (status + dividers) */
+  --gb-green: #2f7d3a;
+  --gb-green-bg: #eef6ef;
+  --gb-amber-fg: #8a6400;
+  --gb-amber-bg: #faf3df;
+  --gb-red: #b3261e;
+  --gb-red-bg: #fbeceb;
+  --gb-divider: #f0f0ed;
 }
 
-/* Top navigation bar. */
+/* ---------- Typography ---------- */
+h1,
+h2,
+h3 {
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.lede {
+  color: var(--color-text-quiet);
+  font-size: var(--text-lg, 1.0625rem);
+  margin-block-end: var(--space-sm);
+}
+
+/* ---------- Header (block) ---------- */
 .site-header {
   border-block-end: var(--border-width-thin, 1px) solid var(--color-surface-border);
   background: var(--color-surface-raised);
@@ -13,11 +67,31 @@
   text-decoration: none;
 }
 .site-header__brand {
-  font-weight: var(--font-weight-bold, 700);
+  font-weight: 800;
   font-size: var(--text-lg, 1.125rem);
+  letter-spacing: -0.01em;
+}
+.site-header nav a {
+  color: var(--color-text-quiet);
+}
+.site-header nav a:hover {
+  color: var(--color-text-normal);
+}
+/* Sign-out reads as a small chip rather than a link. */
+.site-header .link-button {
+  border: 1px solid var(--color-surface-border);
+  background: var(--color-surface-default);
+  border-radius: 7px;
+  padding: 5px 10px;
+  font-size: var(--text-xs, 0.75rem);
+  color: var(--color-text-quiet);
+  text-decoration: none;
+}
+.site-header .link-button:hover {
+  color: var(--color-text-normal);
 }
 
-/* A button that reads as a nav link (used for the POST logout form). */
+/* A button that reads as a plain link (table row actions). */
 .logout-form {
   display: inline;
   margin: 0;
@@ -34,24 +108,138 @@
   text-underline-offset: 0.25em;
 }
 
-/* Status pills for scheduled jobs, layered on top of the badge component. */
-.badge[data-status="pending"]   { color: var(--color-warning-text, #92600a); }
-.badge[data-status="running"]   { color: var(--color-info-text, #1e5fbf); }
-.badge[data-status="completed"] { color: var(--color-success-text, #1a7f37); }
-.badge[data-status="failed"]    { color: var(--color-danger-text, #b3261e); }
-.badge[data-status="cancelled"] { color: var(--color-text-quiet); }
+/* ---------- Cards ---------- */
+/* Our templates put content straight inside `.card` (no `.card-content`),
+ * so give the card itself comfortable padding. */
+.card {
+  padding: var(--space-md, 1.25rem);
+}
 
-/* Data tables. */
+/* ---------- Buttons ---------- */
+/* Secondary: white with a hairline border (the design's non-primary actions). */
+.button[data-variant="secondary"] {
+  background: var(--color-surface-raised);
+  color: var(--color-text-normal);
+  border-color: var(--color-surface-border);
+}
+.button[data-variant="secondary"]:hover {
+  background: var(--color-surface-default);
+}
+
+/* ---------- Status pills (badge component) ---------- */
+.badge {
+  background: var(--color-surface-default);
+  color: var(--color-text-quiet);
+  border: 1px solid var(--color-surface-border);
+  font-weight: 700;
+  padding: 0.15em 0.7em;
+}
+.badge[data-status="completed"],
+.badge[data-status="open"] {
+  background: var(--gb-green-bg);
+  color: var(--gb-green);
+  border-color: transparent;
+}
+.badge[data-status="pending"],
+.badge[data-status="running"] {
+  background: var(--gb-amber-bg);
+  color: var(--gb-amber-fg);
+  border-color: transparent;
+}
+.badge[data-status="failed"] {
+  background: var(--gb-red-bg);
+  color: var(--gb-red);
+  border-color: transparent;
+}
+.badge[data-status="cancelled"] {
+  color: var(--color-text-quieter);
+}
+
+/* ---------- Alerts (status colours) ---------- */
+.alert[data-variant="success"] {
+  background: var(--gb-green-bg);
+  border-color: transparent;
+  color: var(--gb-green);
+}
+.alert[data-variant="danger"] {
+  background: var(--gb-red-bg);
+  border-color: transparent;
+  color: var(--gb-red);
+}
+.alert[data-variant="info"] {
+  background: var(--color-surface-raised);
+}
+
+/* ---------- Tables as carded row lists ---------- */
 table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-surface-border);
+  border-radius: var(--panel-radius);
+  overflow: hidden;
+  box-shadow: var(--shadow-xs);
 }
-th, td {
+th,
+td {
   text-align: start;
-  padding: var(--space-xs, 0.5rem) var(--space-sm, 1rem);
-  border-block-end: var(--border-width-thin, 1px) solid var(--color-surface-border);
+  vertical-align: middle;
+  padding: var(--space-xs, 0.75rem) var(--space-sm, 1rem);
+  border-block-end: 1px solid var(--gb-divider);
 }
-th {
+tbody tr:last-child td {
+  border-block-end: 0;
+}
+thead th {
+  font-size: var(--text-xs, 0.75rem);
   font-weight: var(--font-weight-medium, 600);
+  color: var(--color-text-quieter);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-block-end: 1px solid var(--color-surface-border);
+}
+
+/* ---------- Home: scheduler-mode chip + club cards (blocks) ---------- */
+.scheduler-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2xs, 0.5rem);
+  border: 1px solid var(--color-surface-border);
+  border-radius: 10px;
+  padding: 9px 12px;
+  font-size: var(--text-sm, 0.875rem);
   color: var(--color-text-quiet);
+  margin-block-end: var(--space-lg, 2rem);
+}
+/* The dry-run/live marker reads as a dark chip with a coloured label. */
+.scheduler-mode .badge {
+  background: #1f1f1f;
+  border-color: transparent;
+}
+.scheduler-mode .badge[data-status="pending"] {
+  color: #e3ad2a;
+}
+.scheduler-mode .badge[data-status="completed"] {
+  color: #62d36e;
+}
+
+.club-card__meta {
+  color: var(--color-text-quiet);
+  font-size: var(--text-sm, 0.875rem);
+  margin-block-start: 2px;
+}
+.add-club {
+  border: 1px dashed var(--color-surface-border);
+  border-radius: var(--panel-radius);
+  padding: var(--space-sm);
+  text-align: center;
+  font-weight: 600;
+  color: var(--color-text-quieter);
+  text-decoration: none;
+  display: block;
+}
+.add-club:hover {
+  color: var(--color-text-normal);
+  border-color: var(--color-text-quieter);
 }

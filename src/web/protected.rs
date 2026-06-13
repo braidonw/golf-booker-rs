@@ -19,6 +19,8 @@ mod get {
     struct ClubLink {
         id: i64,
         name: String,
+        base_url: String,
+        timezone: String,
     }
 
     #[derive(Template)]
@@ -45,6 +47,8 @@ mod get {
             .map(|c| ClubLink {
                 id: c.id,
                 name: c.name,
+                base_url: c.base_url,
+                timezone: c.timezone,
             })
             .collect();
 
