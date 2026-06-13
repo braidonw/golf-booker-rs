@@ -93,6 +93,36 @@ confirmed everything works against your real club:
 Push changes and redeploy in Coolify. The `golf-data` volume persists, so your
 account, clubs, and scheduled jobs survive the redeploy.
 
+## Persistence & backups
+
+Both volumes are **named** Docker volumes, so they survive container recreation
+and redeploys — Docker only deletes them on `docker compose down -v` or an
+explicit `docker volume rm`:
+
+- `golf-data` → `/data` — the SQLite DB (your account, clubs, scheduled jobs).
+- `tailscale-state` → the node's identity/keys (so it stays the same machine).
+
+In Coolify they appear under the resource's **Storages** tab. Leave them in
+place. The data is wiped only if you **delete the whole resource** (Coolify
+removes its volumes then). A plain redeploy keeps everything.
+
+> The `golf-data` volume holds club credentials (plaintext) and your scheduled
+> jobs — so it's worth backing up, and worth protecting.
+
+**Back up the DB** (run on the Coolify host). The volume name is Compose-project
+prefixed; find it with `docker volume ls | grep golf-data`, then:
+
+```sh
+VOL=$(docker volume ls -q | grep golf-data | head -1)
+docker run --rm -v "$VOL":/data -v "$PWD":/backup alpine \
+  tar czf /backup/golf-backup-$(date +%F).tgz -C /data .
+```
+
+This captures `golf.db` plus its `-wal`/`-shm` sidecars. For a guaranteed-
+consistent snapshot, stop the app briefly first (WAL means a hot copy is usually
+fine for low traffic, but stopping removes any doubt). Restore by extracting the
+tarball back into the volume the same way.
+
 ## Alternative: no sidecar
 
 If your Coolify host is itself already on the tailnet, you can instead deploy
