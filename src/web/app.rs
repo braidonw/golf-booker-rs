@@ -1,6 +1,7 @@
 //! HTTP application wiring: state, router, server.
 
 use crate::config::Config;
+use crate::scheduler::JobScheduler;
 use crate::users::Backend;
 use axum::{routing::get, Router};
 use axum_login::{
@@ -16,12 +17,13 @@ use tower_http::trace::TraceLayer;
 use tower_sessions::cookie::{time::Duration, SameSite};
 use tower_sessions_sqlx_store::SqliteStore;
 
-use super::{auth, clubs, events, protected};
+use super::{auth, clubs, events, jobs, protected};
 
 /// Shared application state handed to every request handler.
 pub struct AppState {
     pub db: SqlitePool,
     pub config: Config,
+    pub scheduler: JobScheduler,
 }
 
 /// Owns startup-time resources before the server is launched.
@@ -45,14 +47,23 @@ impl App {
         crate::users::seed_from_environment(&db).await?;
         crate::clubs::seed_from_environment(&db).await?;
 
+        let scheduler = JobScheduler::new(db.clone(), config.dry_run);
+
         Ok(Self {
-            state: Arc::new(AppState { db, config }),
+            state: Arc::new(AppState {
+                db,
+                config,
+                scheduler,
+            }),
         })
     }
 
     pub async fn serve(self) -> anyhow::Result<()> {
         let port = self.state.config.port;
         let db = self.state.db.clone();
+
+        // Launch the background scheduler dispatcher.
+        self.state.scheduler.start().await;
 
         // Persistent session store (survives restarts), sharing our pool.
         let session_store = SqliteStore::new(db.clone());
@@ -72,6 +83,7 @@ impl App {
             .merge(protected::router(self.state.clone()))
             .merge(clubs::router(self.state.clone()))
             .merge(events::router(self.state.clone()))
+            .merge(jobs::router(self.state.clone()))
             .route_layer(login_required!(Backend, login_url = "/login"))
             .merge(auth::router())
             .route("/health", get(health))

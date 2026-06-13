@@ -5,6 +5,7 @@ mod config;
 mod db;
 mod error;
 mod golf;
+mod scheduler;
 mod users;
 mod web;
 

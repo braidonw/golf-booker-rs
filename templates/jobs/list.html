@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Scheduled bookings · Golf Booker{% endblock %}
+{% block header %}{% include "partials/header.html" %}{% endblock %}
+{% block content %}
+<h1>Scheduled bookings</h1>
+
+{% if let Some(error) = error %}
+  <p class="alert" data-variant="danger" role="alert">{{ error }}</p>
+{% endif %}
+
+{% if jobs.is_empty() %}
+  <p>No scheduled bookings yet.</p>
+{% else %}
+  <table>
+    <thead>
+      <tr><th>Club</th><th>Event</th><th>Group</th><th>Fires at (club local)</th><th>Status</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for job in jobs %}
+        <tr>
+          <td>{{ job.club_name }}</td>
+          <td>{{ job.event_id }}</td>
+          <td>{{ job.group_id }}</td>
+          <td>{{ job.scheduled_local }}</td>
+          <td>
+            <span class="badge" data-status="{{ job.status }}">{{ job.status }}</span>
+            {% if let Some(err) = job.last_error %}<br><small>{{ err }}</small>{% endif %}
+          </td>
+          <td>
+            {% if job.can_cancel %}
+              <form method="post" action="/scheduled-jobs/{{ job.id }}/cancel"
+                    hx-post="/scheduled-jobs/{{ job.id }}/cancel"
+                    hx-target="closest tr" hx-swap="outerHTML"
+                    hx-confirm="Cancel this scheduled booking?" class="logout-form">
+                <button class="link-button" type="submit">Cancel</button>
+              </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endif %}
+
+<div class="card flow" style="margin-block-start: var(--space-lg);">
+  <h2>Schedule a booking</h2>
+  {% if clubs.is_empty() %}
+    <p>Add a club first on the <a href="/clubs">Clubs</a> page.</p>
+  {% else %}
+    <p>The booking fires at the time you set, interpreted in the club's local timezone — so set it to the moment the sheet opens.</p>
+    <form method="post" action="/scheduled-jobs" class="flow">
+      <label>Club
+        <select name="club_id" required>
+          {% for club in clubs %}
+            <option value="{{ club.id }}"{% if club.selected %} selected{% endif %}>{{ club.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Event ID
+        <input class="input" type="number" name="event_id" required
+               value="{% if let Some(e) = prefill_event_id %}{{ e }}{% endif %}">
+      </label>
+      <label>Booking group ID
+        <input class="input" type="number" name="booking_group_id" required
+               value="{% if let Some(g) = prefill_group_id %}{{ g }}{% endif %}">
+      </label>
+      <label>Opens at (club local time)
+        <input class="input" type="datetime-local" name="scheduled_time" required>
+      </label>
+      <button class="button" type="submit">Schedule booking</button>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}

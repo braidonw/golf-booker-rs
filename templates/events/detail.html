@@ -28,10 +28,13 @@
               {% endif %}
             </td>
             <td>
-              <form method="post"
-                    action="/clubs/{{ club_id }}/events/{{ event.id }}/groups/{{ group.id }}/book">
-                <button class="button" type="submit">Book now</button>
-              </form>
+              <span class="cluster" style="--cluster-gap: var(--space-sm);">
+                <form method="post"
+                      action="/clubs/{{ club_id }}/events/{{ event.id }}/groups/{{ group.id }}/book">
+                  <button class="button" type="submit">Book now</button>
+                </form>
+                <a href="/scheduled-jobs?club_id={{ club_id }}&event_id={{ event.id }}&group_id={{ group.id }}">Schedule</a>
+              </span>
             </td>
           </tr>
         {% endfor %}
