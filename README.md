@@ -13,7 +13,7 @@ A ground-up rewrite of the earlier `axum-booker`, on a modern stack.
 - **Storage:** SQLite via [sqlx](https://github.com/launchbadge/sqlx) 0.8
 - **Club client:** [reqwest](https://github.com/seanmonstar/reqwest) 0.13 (per-club cookie jar) against MiClub-style endpoints
 - **Styling:** [Sugarcube](https://sugarcube.sh) design tokens + CUBE CSS, bundled to a single `assets/styles.css`
-- **Deploy (planned):** Docker on Coolify, access restricted to a Tailscale tailnet
+- **Deploy:** Docker on Coolify, access restricted to a Tailscale tailnet (HTTPS via a Tailscale Serve sidecar) — see [docs/DEPLOY.md](docs/DEPLOY.md)
 
 ## Development
 

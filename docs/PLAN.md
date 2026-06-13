@@ -22,16 +22,18 @@ the sqlx session store pins sqlx 0.8. Don't bump one in isolation.
       store, login/logout, `login_required`, env-seeded first account.
       Hardened after security review (open-redirect, CSRF logout, cookie flags,
       constant-time auth).
-- [ ] **2 — Clubs.** `clubs` model + CRUD pages (Askama/HTMX), per-club IANA
+- [x] **2 — Clubs.** `clubs` model + CRUD pages (Askama/HTMX), per-club IANA
       timezone, env-seeding for migration, credentials never rendered back.
-- [ ] **3 — Golf client + browsing.** Port/clean `GolfClient` (login, get_events,
+- [x] **3 — Golf client + browsing.** Port/clean `GolfClient` (login, get_events,
       get_event, book; drop hardcoded dates/`dbg!`). Event browsing with a club
       selector; view a booking group; book-now. Carry the chosen club through.
-- [ ] **4 — Scheduler + jobs UI.** Port the arm → pre-auth → sleep-to-moment →
+- [x] **4 — Scheduler + jobs UI.** Port the arm → pre-auth → sleep-to-moment →
       rapid-retry scheduler, timezone-aware (UTC stored, club-local in/out).
       Jobs list/create/cancel; "schedule from slot" prefill. Dry-run default.
-- [ ] **5 — Deploy.** Multi-stage Dockerfile, persistent volume for SQLite,
-      secrets via env, Coolify config, Tailscale tailnet-only access.
+- [x] **5 — Deploy.** Multi-stage Dockerfile (verified building + running
+      locally), persistent volume for SQLite, secrets via env, docker-compose
+      with a Tailscale Serve sidecar for HTTPS, tailnet-only access. See
+      `docs/DEPLOY.md`.
 - [ ] **6 — Polish.** Scheduler timing tests, booking error classification
       (retryable vs terminal), login rate-limiting (deferred from Phase 1),
       cleanup.

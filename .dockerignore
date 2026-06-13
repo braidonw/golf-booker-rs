@@ -1,0 +1,12 @@
+target
+node_modules
+.git
+.github
+
+# Secrets and local data must never enter the build context / image
+.env
+*.db
+*.db-shm
+*.db-wal
+
+.DS_Store

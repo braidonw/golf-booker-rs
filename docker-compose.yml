@@ -1,0 +1,61 @@
+# Tailnet-only deployment: a Tailscale sidecar joins your tailnet and serves the
+# app over HTTPS via `tailscale serve`; golf-booker shares the sidecar's network
+# so it is reachable ONLY at https://<hostname>.<tailnet>.ts.net — never on the
+# public internet. Suitable for Coolify (deploy as a Docker Compose resource).
+#
+# Set secrets via the environment (Coolify env vars / a .env file): at minimum
+# TS_AUTHKEY, APP_USERNAME, APP_PASSWORD. See docs/DEPLOY.md.
+
+services:
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: golf-booker-ts
+    hostname: golf-booker # -> https://golf-booker.<tailnet>.ts.net
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:?set TS_AUTHKEY (a Tailscale auth key)}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_SERVE_CONFIG: /config/serve.json
+      TS_USERSPACE: "false"
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - ./tailscale/serve.json:/config/serve.json:ro
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+    restart: unless-stopped
+
+  golf-booker:
+    build: .
+    # image: ghcr.io/you/golf-booker:latest   # or pull a prebuilt image instead
+    # Share the Tailscale container's network namespace so `tailscale serve` can
+    # proxy to 127.0.0.1:8080. (A container using network_mode cannot publish its
+    # own ports — that's the point: no public exposure.)
+    network_mode: service:tailscale
+    depends_on:
+      - tailscale
+    environment:
+      PORT: "8080"
+      DATABASE_URL: "sqlite:/data/golf.db"
+      # Scheduler simulates bookings unless explicitly disabled.
+      DRY_RUN: ${DRY_RUN:-true}
+      # Tailscale Serve terminates TLS, so the browser sees HTTPS -> keep Secure.
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      # First-boot seeding (only applied to an empty database).
+      APP_USERNAME: ${APP_USERNAME:-}
+      APP_PASSWORD: ${APP_PASSWORD:-}
+      RIDGE_BASE_URL: ${RIDGE_BASE_URL:-}
+      RIDGE_USERNAME: ${RIDGE_USERNAME:-}
+      RIDGE_PASSWORD: ${RIDGE_PASSWORD:-}
+      RIDGE_MEMBER_ID: ${RIDGE_MEMBER_ID:-}
+      NSW_BASE_URL: ${NSW_BASE_URL:-}
+      NSW_USERNAME: ${NSW_USERNAME:-}
+      NSW_PASSWORD: ${NSW_PASSWORD:-}
+      NSW_MEMBER_ID: ${NSW_MEMBER_ID:-}
+    volumes:
+      - golf-data:/data
+    restart: unless-stopped
+
+volumes:
+  tailscale-state:
+  golf-data:
