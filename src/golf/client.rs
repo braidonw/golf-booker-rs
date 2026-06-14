@@ -42,6 +42,12 @@ impl GolfClient {
         let cookies = Arc::new(CookieStoreMutex::default());
         let http = Client::builder()
             .cookie_provider(cookies)
+            // Without timeouts a stalled connection blocks indefinitely. The
+            // booking POST sets its own tighter per-request timeout (the race
+            // window is only seconds); these are the outer safety net shared by
+            // login and the web-facing event fetches.
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .timeout(std::time::Duration::from_secs(15))
             .build()
             .expect("reqwest client builds with default config");
 
@@ -65,6 +71,12 @@ impl GolfClient {
     }
 
     /// Authenticate, populating the cookie jar for subsequent requests.
+    ///
+    /// `error_for_status` turns a 4xx/5xx (bad credentials, server error,
+    /// maintenance page) into an `Err` — reqwest treats those as success
+    /// otherwise. A club that re-renders the login page with HTTP 200 on a bad
+    /// password can't be caught here without a known page marker; the booking
+    /// path's positive-response check (`book`) is the backstop for that.
     pub async fn login(&self) -> anyhow::Result<()> {
         let form = [
             ("user", self.username.as_str()),
@@ -73,7 +85,12 @@ impl GolfClient {
             ("Submit", "Login"),
         ];
         let url = format!("{}/security/login.msp", self.base_url);
-        self.http.post(&url).form(&form).send().await?;
+        self.http
+            .post(&url)
+            .form(&form)
+            .send()
+            .await?
+            .error_for_status()?;
         Ok(())
     }
 
@@ -138,25 +155,30 @@ impl GolfClient {
         ];
         let url = format!("{}/members/Ajax", self.base_url);
 
-        // Transport failures are worth retrying within the race window.
+        // A booking attempt must fail fast: the retry loop only re-checks its
+        // deadline between attempts, so a stalled request would otherwise eat
+        // the whole race window. This timeout is well under that window.
         let resp = self
             .http
             .post(&url)
             .form(&params)
+            .timeout(std::time::Duration::from_secs(2))
             .send()
             .await
+            // Transport failures (incl. timeout) are worth retrying mid-race.
             .map_err(|e| BookingError::Retryable(format!("request failed: {e}")))?;
+
+        // A non-2xx (auth lapsed since pre-auth, 5xx) is not a booking — retry
+        // rather than fall through to the "no error document == success" path.
+        let resp = resp.error_for_status().map_err(|e| {
+            BookingError::Retryable(format!("booking request returned error status: {e}"))
+        })?;
         let body = resp
             .text()
             .await
             .map_err(|e| BookingError::Retryable(format!("reading response failed: {e}")))?;
 
-        // A booking error comes back as an XML <Error><ErrorText>… document;
-        // a success is anything that doesn't parse as that error shape.
-        match parse_booking_error(&body) {
-            Some(message) => Err(classify_booking_error(&message)),
-            None => Ok(()),
-        }
+        interpret_booking_response(&body)
     }
 }
 
@@ -212,9 +234,36 @@ fn classify_booking_error(message: &str) -> BookingError {
     }
 }
 
+/// Decide what a booking response body means.
+///
+/// MiClub signals a booking failure with an XML `<Error><ErrorText>…` document.
+/// We can't require a *positive* success shape (the club's success body isn't
+/// pinned down), so absence of an error document is treated as booked — except
+/// when the body is plainly a login/HTML page, which means the session lapsed
+/// between pre-auth and firing. Treating that as success would be a false
+/// booking, so it's retried instead.
+fn interpret_booking_response(body: &str) -> Result<(), BookingError> {
+    if let Some(message) = parse_booking_error(body) {
+        return Err(classify_booking_error(&message));
+    }
+    if looks_like_login_page(body) {
+        return Err(BookingError::Retryable(
+            "booking returned a login/HTML page — session likely expired".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Heuristic: does this body look like a login redirect or HTML error page
+/// rather than an API response? Guards against recording a false booking when
+/// the club bounces us to login.
+fn looks_like_login_page(body: &str) -> bool {
+    let lower = body.to_lowercase();
+    lower.contains("<html") || lower.contains("login.msp") || lower.contains("<!doctype")
+}
+
 /// Extract a booking error message from a response body, if it is one. Returns
-/// `None` when the body isn't an error document (or carries no error text),
-/// which we treat as a successful booking.
+/// `None` when the body isn't an error document (or carries no error text).
 fn parse_booking_error(body: &str) -> Option<String> {
     #[derive(serde::Deserialize)]
     struct ErrorResponse {
@@ -264,6 +313,32 @@ mod tests {
     fn no_error_elements_is_success() {
         // A response with no <Error> elements is a successful booking.
         assert!(parse_booking_error("<Response><ok/></Response>").is_none());
+    }
+
+    #[test]
+    fn interprets_clean_response_as_booked() {
+        assert!(interpret_booking_response("<Response><ok/></Response>").is_ok());
+    }
+
+    #[test]
+    fn interprets_error_document_as_failure() {
+        let xml = "<Response><Error><ErrorText>Member not eligible</ErrorText></Error></Response>";
+        let err = interpret_booking_response(xml).unwrap_err();
+        assert!(!err.is_retryable(), "eligibility error should be terminal");
+    }
+
+    #[test]
+    fn login_page_response_is_retryable_not_booked() {
+        // A lapsed session bounces us to a login/HTML page. Treating that as a
+        // success would record a booking that never happened.
+        for body in [
+            "<!DOCTYPE html><html><body>Please log in</body></html>",
+            "<html><form action=\"/security/login.msp\"></form></html>",
+        ] {
+            let err = interpret_booking_response(body)
+                .expect_err("login page must not count as a booking");
+            assert!(err.is_retryable(), "expected retryable for: {body}");
+        }
     }
 
     #[test]
