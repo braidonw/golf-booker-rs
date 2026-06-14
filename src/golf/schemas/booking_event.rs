@@ -1,4 +1,4 @@
-use super::booking_group::BookingGroups;
+use super::booking_group::{BookingGroup, BookingGroups};
 use chrono::NaiveDateTime;
 use serde::Deserialize;
 
@@ -19,6 +19,17 @@ pub struct BookingEvent {
     pub last_modifier_id: Option<u32>,
     #[serde(rename(deserialize = "BookingSections"))]
     pub booking_sections: BookingSections,
+}
+
+impl BookingEvent {
+    /// Find a booking group anywhere in the sheet by its id.
+    pub fn find_group(&self, id: u32) -> Option<&BookingGroup> {
+        self.booking_sections
+            .sections
+            .iter()
+            .flat_map(|s| s.booking_groups.groups.iter().flatten())
+            .find(|g| g.id == id)
+    }
 }
 
 #[derive(Debug, Deserialize)]

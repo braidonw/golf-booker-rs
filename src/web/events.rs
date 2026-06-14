@@ -1,4 +1,5 @@
-//! Multi-club event browsing and immediate ("book now") booking.
+//! Multi-club event browsing, immediate ("book now") booking, and the
+//! "schedule this booking" page (the only entry point to scheduling).
 
 use super::app::AppState;
 use crate::clubs::Club;
@@ -8,7 +9,7 @@ use crate::users::AuthSession;
 use crate::web::render;
 use askama::Template;
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     response::{IntoResponse, Response},
     routing::{get, post},
     Router,
@@ -22,6 +23,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(
             "/clubs/{club_id}/events/{event_id}/groups/{group_id}/book",
             post(post::book),
+        )
+        .route(
+            "/clubs/{club_id}/events/{event_id}/groups/{group_id}/schedule",
+            get(get::schedule),
         )
         .with_state(state)
 }
@@ -62,8 +67,51 @@ struct Flash {
     text: String,
 }
 
-/// Event detail with its booking sheet. Rendered by both the GET view and the
-/// POST book handler (the latter adds a `flash`), so it lives at module scope.
+/// A compact summary of an event's metadata, shown on the detail page.
+struct EventSummary {
+    status: String,
+    gender: String,
+    availability: u32,
+    type_code: Option<u32>,
+    category_code: Option<u32>,
+    time_code: Option<String>,
+    flags: Vec<&'static str>,
+    is_open: bool,
+}
+
+impl From<&GolfEvent> for EventSummary {
+    fn from(e: &GolfEvent) -> Self {
+        let mut flags = Vec::new();
+        if e.is_lottery == Some(true) {
+            flags.push("Lottery");
+        }
+        if e.has_competition == Some(true) {
+            flags.push("Competition");
+        }
+        if e.is_matchplay {
+            flags.push("Matchplay");
+        }
+        if e.is_ballot_open {
+            flags.push("Ballot open");
+        }
+        if e.is_results {
+            flags.push("Results posted");
+        }
+        Self {
+            status: e.status(),
+            gender: e.gender_label().to_string(),
+            availability: e.availability,
+            type_code: e.event_type_code,
+            category_code: e.event_category_code,
+            time_code: e.event_time_code_friendly.clone(),
+            flags,
+            is_open: e.is_open,
+        }
+    }
+}
+
+/// Event detail with its booking sheet. Rendered by the GET view and the POST
+/// book handler (the latter adds a `flash`), so it lives at module scope.
 #[derive(Template)]
 #[template(path = "events/detail.html")]
 struct DetailTemplate {
@@ -71,7 +119,37 @@ struct DetailTemplate {
     club_id: i64,
     club_name: String,
     event: BookingEvent,
+    summary: Option<EventSummary>,
     flash: Option<Flash>,
+}
+
+/// Fetch the sheet + metadata for an event and render the detail page.
+async fn render_detail(
+    username: String,
+    club_id: i64,
+    club_name: String,
+    client: &GolfClient,
+    event_id: u32,
+    flash: Option<Flash>,
+) -> Result<Response, AppError> {
+    let event = client.get_event(event_id).await?;
+    // Metadata is best-effort — a detail page is still useful without it.
+    let summary = client
+        .get_event_meta(event_id)
+        .await
+        .ok()
+        .flatten()
+        .map(|m| EventSummary::from(&m));
+
+    Ok(render(&DetailTemplate {
+        username,
+        club_id,
+        club_name,
+        event,
+        summary,
+        flash,
+    })?
+    .into_response())
 }
 
 mod get {
@@ -121,14 +199,91 @@ mod get {
         let club = load_club(&state, club_id).await?;
         let client = GolfClient::from_club(&club);
         client.login().await?;
-        let event = client.get_event(event_id).await?;
+        render_detail(
+            username_of(&auth),
+            club_id,
+            club.name,
+            &client,
+            event_id,
+            None,
+        )
+        .await
+    }
 
-        Ok(render(&DetailTemplate {
+    #[derive(Template)]
+    #[template(path = "events/schedule.html")]
+    struct ScheduleTemplate {
+        username: String,
+        club_id: i64,
+        club_name: String,
+        club_tz: String,
+        event_id: u32,
+        group_id: u32,
+        event_title: String,
+        event_date: String,
+        slot_time: Option<String>,
+        slot_holes: Option<u32>,
+        slot_booked: Option<usize>,
+        default_time: String,
+        opens_hint: Option<String>,
+        error: Option<String>,
+    }
+
+    #[derive(serde::Deserialize)]
+    pub struct ScheduleQuery {
+        error: Option<String>,
+    }
+
+    pub async fn schedule(
+        auth: AuthSession,
+        State(state): State<Arc<AppState>>,
+        Path((club_id, event_id, group_id)): Path<(i64, u32, u32)>,
+        Query(q): Query<ScheduleQuery>,
+    ) -> Result<Response, AppError> {
+        let club = load_club(&state, club_id).await?;
+        let client = GolfClient::from_club(&club);
+        client.login().await?;
+
+        let event = client.get_event(event_id).await?;
+        let group = event.find_group(group_id);
+        let (slot_time, slot_holes, slot_booked) = match group {
+            Some(g) => (Some(g.time.clone()), g.holes(), Some(g.entry_count())),
+            None => (None, None, None),
+        };
+
+        // Metadata gives us the auto-open time to pre-fill (best-effort).
+        let meta = client.get_event_meta(event_id).await.ok().flatten();
+        let default_time = meta
+            .as_ref()
+            .and_then(|m| m.auto_open_input())
+            .unwrap_or_default();
+        let opens_hint = meta.and_then(|m| m.auto_open_date_time_display.clone());
+
+        let error = q.error.as_deref().map(|code| {
+            match code {
+                "past" => "That time is in the past.",
+                "badtime" => "Couldn't read that date/time.",
+                "unknownclub" => "That club no longer exists.",
+                _ => "Couldn't schedule that booking.",
+            }
+            .to_string()
+        });
+
+        Ok(render(&ScheduleTemplate {
             username: username_of(&auth),
             club_id,
             club_name: club.name,
-            event,
-            flash: None,
+            club_tz: club.timezone,
+            event_id,
+            group_id,
+            event_title: event.name,
+            event_date: event.date.format("%A %d %B %Y").to_string(),
+            slot_time,
+            slot_holes,
+            slot_booked,
+            default_time,
+            opens_hint,
+            error,
         })?
         .into_response())
     }
@@ -172,16 +327,14 @@ mod post {
             }
         };
 
-        // Re-fetch so the sheet reflects the (attempted) booking.
-        let event = client.get_event(event_id).await?;
-
-        Ok(render(&DetailTemplate {
-            username: username_of(&auth),
+        render_detail(
+            username_of(&auth),
             club_id,
-            club_name: club.name,
-            event,
-            flash: Some(flash),
-        })?
-        .into_response())
+            club.name,
+            &client,
+            event_id,
+            Some(flash),
+        )
+        .await
     }
 }

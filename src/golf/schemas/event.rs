@@ -40,6 +40,53 @@ impl GolfEvent {
             .or_else(|| self.event_status_code.map(|c| c.to_string()))
             .unwrap_or_else(|| "Unknown".to_string())
     }
+
+    /// Who the event accepts, from the male/female flags.
+    pub fn gender_label(&self) -> &'static str {
+        match (self.is_male, self.is_female) {
+            (true, true) => "Men & Women",
+            (true, false) => "Men",
+            (false, true) => "Women",
+            (false, false) => "Open",
+        }
+    }
+
+    /// Parse `auto_open_date_time_display` (the club-local time the sheet opens)
+    /// into a naive datetime, trying the formats MiClub is known to use. Returns
+    /// `None` if absent or unparseable.
+    pub fn auto_open_local(&self) -> Option<chrono::NaiveDateTime> {
+        let raw = self.auto_open_date_time_display.as_deref()?.trim();
+        if raw.is_empty() {
+            return None;
+        }
+        const FORMATS: &[&str] = &[
+            "%d/%m/%Y %H:%M",
+            "%d/%m/%Y %I:%M %p",
+            "%d/%m/%Y %I:%M%p",
+            "%d/%m/%Y %l:%M %p",
+            "%d-%m-%Y %H:%M",
+            "%Y-%m-%d %H:%M",
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%dT%H:%M",
+            "%a %d %b %Y %I:%M %p",
+            "%A %d %B %Y %I:%M %p",
+            "%d %b %Y %I:%M %p",
+            "%d %B %Y %I:%M %p",
+            "%d %b %Y %H:%M",
+        ];
+        for fmt in FORMATS {
+            if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(raw, fmt) {
+                return Some(dt);
+            }
+        }
+        None
+    }
+
+    /// `auto_open_local` formatted for a `datetime-local` input, if parseable.
+    pub fn auto_open_input(&self) -> Option<String> {
+        self.auto_open_local()
+            .map(|dt| dt.format("%Y-%m-%dT%H:%M").to_string())
+    }
 }
 
 #[cfg(test)]
@@ -60,6 +107,53 @@ mod tests {
         assert_eq!(events[0].title, "Saturday Comp");
         assert!(events[0].is_open);
         assert_eq!(events[0].status(), "Open");
+    }
+
+    #[test]
+    fn parses_auto_open_display_formats() {
+        let mk = |s: &str| GolfEvent {
+            id: 1,
+            event_date: "2026-06-20".parse().unwrap(),
+            event_status_code: None,
+            event_status_code_friendly: None,
+            title: "x".into(),
+            booking_resource_id: None,
+            is_lottery: None,
+            can_open_event: None,
+            has_competition: None,
+            event_type_code: None,
+            event_category_code: None,
+            event_time_code_friendly: None,
+            auto_open_date_time_display: Some(s.into()),
+            availability: 0,
+            is_ballot: false,
+            is_ballot_open: false,
+            is_results: false,
+            is_open: false,
+            is_female: false,
+            is_male: false,
+            is_matchplay: false,
+        };
+        assert_eq!(
+            mk("11/06/2026 07:00").auto_open_input().as_deref(),
+            Some("2026-06-11T07:00")
+        );
+        assert_eq!(
+            mk("11/06/2026 7:00 AM").auto_open_input().as_deref(),
+            Some("2026-06-11T07:00")
+        );
+        assert!(mk("sometime next week").auto_open_input().is_none());
+        assert!(mk("").auto_open_input().is_none());
+    }
+
+    #[test]
+    fn gender_label_reflects_flags() {
+        let mut e: GolfEvent = serde_json::from_str(
+            r#"{"bookingEventId":1,"eventDate":"2026-06-20","title":"x","availability":0,"isBallot":false,"isBallotOpen":false,"isResults":false,"isOpen":true,"isFemale":false,"isMale":true,"isMatchplay":false}"#,
+        ).unwrap();
+        assert_eq!(e.gender_label(), "Men");
+        e.is_female = true;
+        assert_eq!(e.gender_label(), "Men & Women");
     }
 
     #[test]

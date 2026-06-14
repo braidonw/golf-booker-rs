@@ -10,6 +10,24 @@
   <p class="alert" data-variant="{% if flash.ok %}success{% else %}danger{% endif %}" role="alert">{{ flash.text }}</p>
 {% endif %}
 
+{% if let Some(s) = summary %}
+  <div class="card flow event-summary" style="margin-block-end: var(--space-lg);">
+    <div class="cluster" style="--cluster-gap: var(--space-md);">
+      <div><div class="event-summary__label">Status</div><div>{% if s.is_open %}<span class="badge" data-status="open">{{ s.status }}</span>{% else %}<span class="badge" data-status="pending">{{ s.status }}</span>{% endif %}</div></div>
+      <div><div class="event-summary__label">Players</div><div>{{ s.gender }}</div></div>
+      <div><div class="event-summary__label">Availability</div><div>{{ s.availability }}</div></div>
+      {% if let Some(t) = s.time_code %}<div><div class="event-summary__label">Time</div><div>{{ t }}</div></div>{% endif %}
+      {% if let Some(ty) = s.type_code %}<div><div class="event-summary__label">Type</div><div>{{ ty }}</div></div>{% endif %}
+      {% if let Some(c) = s.category_code %}<div><div class="event-summary__label">Category</div><div>{{ c }}</div></div>{% endif %}
+    </div>
+    {% if !s.flags.is_empty() %}
+      <div class="cluster" style="--cluster-gap: var(--space-2xs);">
+        {% for flag in s.flags %}<span class="badge">{{ flag }}</span>{% endfor %}
+      </div>
+    {% endif %}
+  </div>
+{% endif %}
+
 {% for section in event.booking_sections.sections %}
   <h2>{{ section.name }}</h2>
   {% if let Some(groups) = section.booking_groups.groups %}
@@ -33,7 +51,7 @@
                       action="/clubs/{{ club_id }}/events/{{ event.id }}/groups/{{ group.id }}/book">
                   <button class="button" type="submit">Book now</button>
                 </form>
-                <a class="button" data-variant="secondary" href="/scheduled-jobs?club_id={{ club_id }}&event_id={{ event.id }}&group_id={{ group.id }}">Schedule</a>
+                <a class="button" data-variant="secondary" href="/clubs/{{ club_id }}/events/{{ event.id }}/groups/{{ group.id }}/schedule">Schedule</a>
               </span>
             </td>
           </tr>

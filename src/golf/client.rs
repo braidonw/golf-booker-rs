@@ -102,6 +102,17 @@ impl GolfClient {
         Ok(events)
     }
 
+    /// Fetch the list metadata for one event (category, type, gender, auto-open
+    /// time, …), by finding it in the events list. `None` if it's outside the
+    /// listing window.
+    pub async fn get_event_meta(&self, event_id: u32) -> anyhow::Result<Option<GolfEvent>> {
+        Ok(self
+            .get_events()
+            .await?
+            .into_iter()
+            .find(|e| e.id == event_id))
+    }
+
     /// Fetch a single event with its booking sheet (XML).
     pub async fn get_event(&self, event_id: u32) -> anyhow::Result<BookingEvent> {
         let url = format!("{}/spring/bookings/events/{}", self.base_url, event_id);

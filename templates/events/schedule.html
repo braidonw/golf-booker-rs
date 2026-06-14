@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Schedule booking · Golf Booker{% endblock %}
+{% block header %}{% include "partials/header.html" %}{% endblock %}
+{% block content %}
+<div style="max-width: 36rem;">
+  <p><a href="/clubs/{{ club_id }}/events/{{ event_id }}">← Back to tee times</a></p>
+  <h1>Schedule this booking</h1>
+  <p class="lede">You've picked your tee time. Tell me when booking opens and I'll secure it the moment it does.</p>
+
+  {% if let Some(error) = error %}
+    <p class="alert" data-variant="danger" role="alert">{{ error }}</p>
+  {% endif %}
+
+  <div class="card flow" style="margin-block-end: var(--space-lg);">
+    <div class="club-card__meta" style="text-transform: uppercase; letter-spacing: 0.04em; font-weight: 700;">Your tee time</div>
+    {% if let Some(time) = slot_time %}
+      <div style="display: flex; align-items: baseline; gap: var(--space-xs);">
+        <span style="font-size: var(--text-3xl); font-weight: 800; letter-spacing: -0.02em;">{{ time }}</span>
+        <span class="club-card__meta">
+          {% if let Some(h) = slot_holes %}{{ h }} holes{% endif %}
+          {% if let Some(b) = slot_booked %} · {{ b }} booked{% endif %}
+        </span>
+      </div>
+    {% else %}
+      <div style="font-weight: 700;">Booking group #{{ group_id }}</div>
+    {% endif %}
+    <div style="font-weight: 600;">{{ event_title }}</div>
+    <div class="club-card__meta">{{ club_name }} · {{ event_date }}</div>
+  </div>
+
+  <form method="post" action="/scheduled-jobs" class="flow">
+    <input type="hidden" name="club_id" value="{{ club_id }}">
+    <input type="hidden" name="event_id" value="{{ event_id }}">
+    <input type="hidden" name="booking_group_id" value="{{ group_id }}">
+    <label>
+      Booking opens at <span class="club-card__meta">({{ club_tz }})</span>
+      <input class="input" type="datetime-local" name="scheduled_time" value="{{ default_time }}" required>
+    </label>
+    {% if let Some(hint) = opens_hint %}
+      <p class="club-card__meta">The club lists this sheet as opening <strong>{{ hint }}</strong> — I'll fire the request at that moment. Adjust if needed.</p>
+    {% else %}
+      <p class="club-card__meta">Set this to the exact moment the sheet opens (club local time).</p>
+    {% endif %}
+    <button class="button" type="submit">Schedule booking</button>
+  </form>
+</div>
+{% endblock %}

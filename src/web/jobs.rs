@@ -1,4 +1,5 @@
-//! Scheduled-booking pages: list, create (timezone-aware), cancel.
+//! Scheduled-booking pages: list and cancel. Creation happens from a slot's
+//! "Schedule" button (see `web::events`), which posts here.
 
 use super::app::AppState;
 use crate::error::AppError;
@@ -7,7 +8,7 @@ use crate::users::AuthSession;
 use crate::web::render;
 use askama::Template;
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::HeaderMap,
     response::{IntoResponse, Redirect, Response},
     routing::{get, post},
@@ -45,13 +46,11 @@ fn parse_local_datetime(value: &str) -> Option<NaiveDateTime> {
 }
 
 /// Interpret a `datetime-local` value as wall-clock time in `tz` and convert to
-/// UTC. Returns `None` for an unparseable or non-existent local time (e.g. a
-/// spring-forward gap).
+/// UTC. `None` for an unparseable or non-existent local time (spring-forward gap).
 fn local_to_utc(value: &str, tz: Tz) -> Option<DateTime<Utc>> {
     let naive = parse_local_datetime(value)?;
     match tz.from_local_datetime(&naive) {
         chrono::LocalResult::Single(dt) => Some(dt.with_timezone(&Utc)),
-        // DST fall-back: two valid instants — take the earliest.
         chrono::LocalResult::Ambiguous(dt, _) => Some(dt.with_timezone(&Utc)),
         chrono::LocalResult::None => None,
     }
@@ -80,98 +79,11 @@ struct JobRow {
     can_cancel: bool,
 }
 
-/// A club option in the create-form dropdown.
-struct ClubOption {
-    id: i64,
-    name: String,
-    selected: bool,
-}
-
 #[derive(Template)]
 #[template(path = "jobs/list.html")]
 struct ListTemplate {
     username: String,
     jobs: Vec<JobRow>,
-    clubs: Vec<ClubOption>,
-    error: Option<String>,
-    // Prefill (e.g. arriving from a slot's "Schedule" button).
-    prefill_event_id: Option<i64>,
-    prefill_group_id: Option<u32>,
-}
-
-/// Prefill query params carried from a booking slot.
-#[derive(Deserialize, Clone)]
-pub struct Prefill {
-    club_id: Option<i64>,
-    event_id: Option<i64>,
-    group_id: Option<u32>,
-}
-
-async fn render_list(
-    state: &AppState,
-    auth: &AuthSession,
-    prefill: Prefill,
-    error: Option<String>,
-) -> Result<Response, AppError> {
-    let uid = user_id(auth).ok_or_else(|| anyhow::anyhow!("not authenticated"))?;
-
-    // Club name + timezone lookup for rendering local times and the dropdown.
-    let clubs = crate::clubs::list(&state.db).await?;
-    let club_meta: HashMap<i64, (String, Tz)> = clubs
-        .iter()
-        .map(|c| {
-            (
-                c.id,
-                (c.name.clone(), c.timezone.parse().unwrap_or(Tz::UTC)),
-            )
-        })
-        .collect();
-
-    let jobs = state
-        .scheduler
-        .get_user_jobs(uid)
-        .await?
-        .into_iter()
-        .map(|job| {
-            let (club_name, tz) = job
-                .club_id
-                .and_then(|id| club_meta.get(&id).cloned())
-                .unwrap_or_else(|| ("(removed)".to_string(), Tz::UTC));
-            let group_id = match job.job_data() {
-                Ok(JobData::Booking(d)) => d.booking_group_id,
-                Err(_) => 0,
-            };
-            JobRow {
-                id: job.id,
-                club_name,
-                event_id: job.event_id.unwrap_or_default(),
-                group_id,
-                scheduled_local: utc_to_local_display(&job.scheduled_time, tz),
-                can_cancel: job.status == "pending",
-                status: job.status,
-                last_error: job.last_error,
-            }
-        })
-        .collect();
-
-    let club_options = clubs
-        .iter()
-        .map(|c| ClubOption {
-            id: c.id,
-            name: c.name.clone(),
-            selected: prefill.club_id == Some(c.id),
-        })
-        .collect();
-
-    Ok(render(&ListTemplate {
-        username: username_of(auth),
-        jobs,
-        clubs: club_options,
-        error,
-        prefill_event_id: prefill.event_id,
-        prefill_group_id: prefill.group_id,
-    })?
-    .into_response())
 }
 
 mod get {
@@ -180,9 +92,48 @@ mod get {
     pub async fn list(
         auth: AuthSession,
         State(state): State<Arc<AppState>>,
-        Query(prefill): Query<Prefill>,
     ) -> Result<Response, AppError> {
-        render_list(&state, &auth, prefill, None).await
+        let uid = user_id(&auth).ok_or_else(|| anyhow::anyhow!("not authenticated"))?;
+
+        // Club name + timezone lookup for rendering local times.
+        let club_meta: HashMap<i64, (String, Tz)> = crate::clubs::list(&state.db)
+            .await?
+            .into_iter()
+            .map(|c| (c.id, (c.name, c.timezone.parse().unwrap_or(Tz::UTC))))
+            .collect();
+
+        let jobs = state
+            .scheduler
+            .get_user_jobs(uid)
+            .await?
+            .into_iter()
+            .map(|job| {
+                let (club_name, tz) = job
+                    .club_id
+                    .and_then(|id| club_meta.get(&id).cloned())
+                    .unwrap_or_else(|| ("(removed)".to_string(), Tz::UTC));
+                let group_id = match job.job_data() {
+                    Ok(JobData::Booking(d)) => d.booking_group_id,
+                    Err(_) => 0,
+                };
+                JobRow {
+                    id: job.id,
+                    club_name,
+                    event_id: job.event_id.unwrap_or_default(),
+                    group_id,
+                    scheduled_local: utc_to_local_display(&job.scheduled_time, tz),
+                    can_cancel: job.status == "pending",
+                    status: job.status,
+                    last_error: job.last_error,
+                }
+            })
+            .collect();
+
+        Ok(render(&ListTemplate {
+            username: username_of(&auth),
+            jobs,
+        })?
+        .into_response())
     }
 }
 
@@ -207,35 +158,26 @@ mod post {
             return Err(anyhow::anyhow!("not authenticated").into());
         };
 
-        let prefill = Prefill {
-            club_id: Some(form.club_id),
-            event_id: Some(form.event_id),
-            group_id: Some(form.booking_group_id),
+        // On any validation problem, bounce back to the slot's schedule page
+        // with an error code (it has the context to re-render).
+        let back = |code: &str| {
+            Redirect::to(&format!(
+                "/clubs/{}/events/{}/groups/{}/schedule?error={code}",
+                form.club_id, form.event_id, form.booking_group_id
+            ))
+            .into_response()
         };
 
-        let club = match crate::clubs::get(&state.db, form.club_id).await? {
-            Some(c) => c,
-            None => return render_list(&state, &auth, prefill, Some("Unknown club.".into())).await,
+        let Some(club) = crate::clubs::get(&state.db, form.club_id).await? else {
+            return Ok(back("unknownclub"));
         };
         let tz: Tz = club.timezone.parse().unwrap_or(Tz::UTC);
 
         let Some(when_utc) = local_to_utc(&form.scheduled_time, tz) else {
-            return render_list(
-                &state,
-                &auth,
-                prefill,
-                Some("Couldn't read that date/time.".into()),
-            )
-            .await;
+            return Ok(back("badtime"));
         };
         if when_utc <= Utc::now() {
-            return render_list(
-                &state,
-                &auth,
-                prefill,
-                Some("That time is in the past.".into()),
-            )
-            .await;
+            return Ok(back("past"));
         }
 
         state
@@ -277,7 +219,6 @@ mod tests {
 
     #[test]
     fn local_to_utc_uses_club_timezone() {
-        // 10:00 in Sydney (UTC+10 in June, no DST) is 00:00 UTC.
         let utc = local_to_utc("2026-06-20T10:00", Tz::Australia__Sydney).unwrap();
         assert_eq!(utc.to_rfc3339(), "2026-06-20T00:00:00+00:00");
     }

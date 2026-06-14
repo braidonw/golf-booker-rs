@@ -2537,6 +2537,16 @@ thead th {
   font-size: var(--text-sm, 0.875rem);
   margin-block-start: 2px;
 }
+
+/* Event metadata summary (detail page). */
+.event-summary__label {
+  font-size: var(--text-xs, 0.75rem);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-quieter);
+  margin-block-end: 2px;
+}
 .add-club {
   border: 1px dashed var(--color-surface-border);
   border-radius: var(--panel-radius);
