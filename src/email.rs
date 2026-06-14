@@ -42,7 +42,13 @@ impl Mailer {
         } else {
             AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&cfg.host)?
         };
-        let transport = builder.port(cfg.port).credentials(creds).build();
+        // Bound a send so a hung SMTP server can't tie up the calling task
+        // (notifications run inside scheduler job tasks) indefinitely.
+        let transport = builder
+            .port(cfg.port)
+            .credentials(creds)
+            .timeout(Some(std::time::Duration::from_secs(15)))
+            .build();
 
         tracing::info!(host = %cfg.host, port = cfg.port, "SMTP configured");
         Ok(Self {
@@ -65,5 +71,55 @@ impl Mailer {
             .body(body)?;
         inner.transport.send(email).await?;
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn smtp_config(from: &str) -> SmtpConfig {
+        SmtpConfig {
+            host: "smtp.example.com".to_string(),
+            port: 465,
+            username: "secret-login".to_string(),
+            password: "hunter2-secret".to_string(),
+            from: from.to_string(),
+        }
+    }
+
+    #[test]
+    fn no_config_yields_disabled_mailer() {
+        let mailer = Mailer::from_config(None).expect("disabled mailer builds");
+        assert!(mailer.inner.is_none());
+    }
+
+    #[tokio::test]
+    async fn disabled_mailer_send_is_ok_false_not_error() {
+        // Both callers rely on "disabled" being Ok(false), distinct from a send
+        // failure — it lets them fall back rather than surface an error.
+        let mailer = Mailer::from_config(None).unwrap();
+        let sent = mailer
+            .send("a@b.com", "hi", "body".to_string())
+            .await
+            .expect("disabled send must not error");
+        assert!(!sent);
+    }
+
+    #[test]
+    fn invalid_from_address_fails_at_build() {
+        let err = match Mailer::from_config(Some(&smtp_config("not-an-address"))) {
+            Ok(_) => panic!("a malformed From address should fail to build"),
+            Err(e) => e,
+        };
+        assert!(err.to_string().contains("invalid SMTP_FROM"), "got: {err}");
+    }
+
+    #[test]
+    fn debug_redacts_smtp_credentials() {
+        let dbg = format!("{:?}", smtp_config("me@example.com"));
+        assert!(!dbg.contains("hunter2-secret"), "password leaked: {dbg}");
+        assert!(!dbg.contains("secret-login"), "username leaked: {dbg}");
+        assert!(dbg.contains("me@example.com"), "from should be shown: {dbg}");
     }
 }

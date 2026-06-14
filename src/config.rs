@@ -21,7 +21,7 @@ pub struct Config {
 }
 
 /// Outbound SMTP configuration (Fastmail by default).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SmtpConfig {
     pub host: String,
     pub port: u16,
@@ -29,6 +29,19 @@ pub struct SmtpConfig {
     pub password: String,
     /// `From:` address (typically your Fastmail address).
     pub from: String,
+}
+
+// Manual Debug so SMTP credentials never leak (e.g. via `Config`'s derive).
+impl std::fmt::Debug for SmtpConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SmtpConfig")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("username", &"[redacted]")
+            .field("password", &"[redacted]")
+            .field("from", &self.from)
+            .finish()
+    }
 }
 
 impl SmtpConfig {
