@@ -61,15 +61,14 @@ impl LoginLimiter {
 
     fn record_failure_at(&self, key: &str, now: Instant) {
         let mut map = self.inner.lock().unwrap();
+        // Drop entries whose window has fully elapsed, so the map can't grow
+        // unbounded with one-off (or attacker-supplied) usernames. This also
+        // resets a lapsed key: it's re-created fresh just below.
+        map.retain(|_, a| now.duration_since(a.window_start) < self.window);
         let entry = map.entry(key.to_string()).or_insert(Attempts {
             failures: 0,
             window_start: now,
         });
-        // Reset the counter if the previous window has elapsed.
-        if now.duration_since(entry.window_start) >= self.window {
-            entry.failures = 0;
-            entry.window_start = now;
-        }
         entry.failures += 1;
     }
 }
@@ -111,6 +110,22 @@ mod tests {
         assert!(!lim.allowed_at("bob", t0));
         let later = t0 + Duration::from_secs(301);
         assert!(lim.allowed_at("bob", later), "window should have reset");
+    }
+
+    #[test]
+    fn evicts_stale_entries_to_bound_the_map() {
+        let lim = LoginLimiter::new(3, Duration::from_secs(300));
+        let t0 = Instant::now();
+        lim.record_failure_at("old", t0);
+        assert_eq!(lim.inner.lock().unwrap().len(), 1);
+
+        // A later failure for a different key prunes the now-stale "old" entry.
+        let later = t0 + Duration::from_secs(301);
+        lim.record_failure_at("new", later);
+        let map = lim.inner.lock().unwrap();
+        assert!(!map.contains_key("old"), "stale entry should be evicted");
+        assert!(map.contains_key("new"));
+        assert_eq!(map.len(), 1);
     }
 
     #[test]

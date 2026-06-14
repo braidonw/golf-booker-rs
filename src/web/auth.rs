@@ -180,10 +180,13 @@ mod post {
         State(state): State<Arc<AppState>>,
         Form(form): Form<ResetForm>,
     ) -> Result<Response, AppError> {
-        if form.password.len() < 8 {
+        if form.password.len() < crate::users::MIN_PASSWORD_LEN {
             return Ok(render(&ResetTemplate {
                 token: form.token,
-                message: Some("Password must be at least 8 characters.".to_string()),
+                message: Some(format!(
+                    "Password must be at least {} characters.",
+                    crate::users::MIN_PASSWORD_LEN
+                )),
                 done: false,
             })?
             .into_response());

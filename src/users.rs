@@ -12,6 +12,9 @@ use std::sync::OnceLock;
 /// How long a password-reset link stays valid.
 const RESET_TOKEN_TTL_HOURS: i64 = 1;
 
+/// Minimum length for an account password, enforced on creation and on reset.
+pub const MIN_PASSWORD_LEN: usize = 8;
+
 /// A fixed Argon2 hash used to spend constant time verifying credentials when no
 /// matching user exists, defeating username-enumeration timing attacks.
 fn dummy_hash() -> &'static str {

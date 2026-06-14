@@ -96,11 +96,17 @@ mod post {
     ) -> Result<Response, AppError> {
         let username = form.username.trim();
         let email = form.email.trim();
-        if username.is_empty() || form.password.is_empty() {
+        if username.is_empty() {
+            return render_list(&state, &auth, Some("Username is required.".into())).await;
+        }
+        if form.password.len() < crate::users::MIN_PASSWORD_LEN {
             return render_list(
                 &state,
                 &auth,
-                Some("Username and password are required.".into()),
+                Some(format!(
+                    "Password must be at least {} characters.",
+                    crate::users::MIN_PASSWORD_LEN
+                )),
             )
             .await;
         }

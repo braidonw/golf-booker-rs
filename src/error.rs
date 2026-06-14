@@ -23,16 +23,18 @@ impl AppError {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        if self.status.is_server_error() {
+        // Server errors carry internal detail (DB/club-client failures) that the
+        // client shouldn't see — log it, but show a generic message. Client
+        // errors (404s and the like) are safe and useful to surface verbatim.
+        let message = if self.status.is_server_error() {
             tracing::error!("request error ({}): {:#}", self.status, self.source);
+            "Something went wrong.".to_string()
         } else {
             tracing::warn!("request error ({}): {:#}", self.status, self.source);
-        }
+            self.source.to_string()
+        };
 
-        let body = Html(format!(
-            "<p>{}</p>",
-            html_escape::encode_text(&self.source.to_string())
-        ));
+        let body = Html(format!("<p>{}</p>", html_escape::encode_text(&message)));
         (self.status, body).into_response()
     }
 }
