@@ -18,7 +18,7 @@
         <span style="font-size: var(--text-3xl); font-weight: 800; letter-spacing: -0.02em;">{{ time }}</span>
         <span class="club-card__meta">
           {% if let Some(h) = slot_holes %}{{ h }} holes{% endif %}
-          {% if let Some(b) = slot_booked %} · {{ b }} booked{% endif %}
+          {% if let Some(b) = slot_booked %} · {{ b }}{% if let Some(s) = slot_size %} / {{ s }}{% endif %} booked{% endif %}
         </span>
       </div>
     {% else %}
@@ -28,6 +28,9 @@
     <div class="club-card__meta">{{ club_name }} · {{ event_date }}</div>
   </div>
 
+  {% if slot_full %}
+    <p class="alert" data-variant="danger" role="alert">This slot is already full, so there's nothing to schedule. Pick another tee time.</p>
+  {% else %}
   <form method="post" action="/scheduled-jobs" class="flow">
     <input type="hidden" name="club_id" value="{{ club_id }}">
     <input type="hidden" name="event_id" value="{{ event_id }}">
@@ -43,5 +46,6 @@
     {% endif %}
     <button class="button" type="submit">Schedule booking</button>
   </form>
+  {% endif %}
 </div>
 {% endblock %}

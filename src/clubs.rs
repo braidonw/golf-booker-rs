@@ -75,6 +75,9 @@ pub async fn create(
 
 /// Update a club. `password` is optional: `None` leaves the stored password
 /// unchanged, so the edit form needn't re-enter it.
+// One parameter per club column; bundling them into a struct would just move
+// the same fields around (cf. `scheduler::notify`).
+#[allow(clippy::too_many_arguments)]
 pub async fn update(
     db: &SqlitePool,
     id: i64,

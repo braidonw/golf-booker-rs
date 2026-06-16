@@ -224,6 +224,8 @@ mod get {
         slot_time: Option<String>,
         slot_holes: Option<u32>,
         slot_booked: Option<usize>,
+        slot_size: Option<u32>,
+        slot_full: bool,
         default_time: String,
         opens_hint: Option<String>,
         error: Option<String>,
@@ -246,9 +248,17 @@ mod get {
 
         let event = client.get_event(event_id).await?;
         let group = event.find_group(group_id);
-        let (slot_time, slot_holes, slot_booked) = match group {
-            Some(g) => (Some(g.time.clone()), g.holes(), Some(g.entry_count())),
-            None => (None, None, None),
+        // A full slot can't be scheduled — there's no seat to race for. (The
+        // detail page hides the button, so this only bites a direct URL.)
+        let slot_full = group.is_some_and(|g| !g.is_schedulable());
+        let (slot_time, slot_holes, slot_booked, slot_size) = match group {
+            Some(g) => (
+                Some(g.time.clone()),
+                g.holes(),
+                Some(g.entry_count()),
+                Some(g.size),
+            ),
+            None => (None, None, None, None),
         };
 
         // Metadata gives us the auto-open time to pre-fill (best-effort).
@@ -281,6 +291,8 @@ mod get {
             slot_time,
             slot_holes,
             slot_booked,
+            slot_size,
+            slot_full,
             default_time,
             opens_hint,
             error,
@@ -308,14 +320,20 @@ mod post {
         let client = GolfClient::from_club(&club);
         client.login().await?;
 
-        let flash = if state.config.dry_run {
-            tracing::info!(club = %club.name, group_id, "[DRY RUN] would book now");
-            Flash {
-                ok: true,
-                text: format!("Dry run — would book group {group_id} now (set DRY_RUN=false to book for real)."),
+        // Guard against booking a slot the club would reject anyway (full, or a
+        // closed sheet). The page hides those buttons, but a stale page or a
+        // hand-crafted POST must not slip through — and a dry run should report
+        // the same refusal a real booking would hit, not a false "would book".
+        let flash = match book_guard(&client, event_id, group_id).await {
+            Some(text) => Some(Flash { ok: false, text }),
+            None if state.config.dry_run => {
+                tracing::info!(club = %club.name, group_id, "[DRY RUN] would book now");
+                Some(Flash {
+                    ok: true,
+                    text: format!("Dry run — would book group {group_id} now (set DRY_RUN=false to book for real)."),
+                })
             }
-        } else {
-            match client.book(group_id).await {
+            None => Some(match client.book(group_id).await {
                 Ok(()) => Flash {
                     ok: true,
                     text: "Booked.".to_string(),
@@ -324,7 +342,7 @@ mod post {
                     ok: false,
                     text: format!("Booking failed: {e}"),
                 },
-            }
+            }),
         };
 
         render_detail(
@@ -333,8 +351,26 @@ mod post {
             club.name,
             &client,
             event_id,
-            Some(flash),
+            flash,
         )
         .await
+    }
+
+    /// Check whether a slot can actually be booked now. Returns `Some(reason)`
+    /// when it can't (so the caller shows it as the failure), or `None` to
+    /// proceed. A fetch failure is not a refusal — let the booking attempt be
+    /// the source of truth rather than blocking on a transient read error.
+    async fn book_guard(client: &GolfClient, event_id: u32, group_id: u32) -> Option<String> {
+        let event = client.get_event(event_id).await.ok()?;
+        match event.find_group(group_id) {
+            Some(g) if g.is_full() => Some("That slot is already full.".to_string()),
+            Some(g) if !g.accepts_members() => {
+                Some("That slot doesn't accept member bookings.".to_string())
+            }
+            Some(g) if !g.active => {
+                Some("That tee sheet isn't open for booking yet — schedule it instead.".to_string())
+            }
+            _ => None,
+        }
     }
 }

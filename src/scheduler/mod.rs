@@ -213,7 +213,12 @@ impl JobScheduler {
 /// Mark a job failed with a message, logging it.
 async fn fail_job(db: &SqlitePool, id: i64, msg: String) {
     error!("job {id} failed: {msg}");
-    let _ = set_status(db, id, JobStatus::Failed, Some(&msg)).await;
+    if let Err(e) = set_status(db, id, JobStatus::Failed, Some(&msg)).await {
+        error!(
+            job_id = id,
+            "additionally failed to persist failed status: {e}"
+        );
+    }
 }
 
 /// Requeue any jobs stuck in `running` back to `pending` so the dispatcher can
@@ -307,9 +312,22 @@ async fn arm_and_run_job(
 
     match fire_booking(&client, dry_run, &booking, target).await {
         Ok(()) => {
-            info!("job {} completed", job.id);
-            let _ = set_status(db, job.id, JobStatus::Completed, None).await;
-            let _ = mark_completed(db, job.id).await;
+            info!(job_id = job.id, "job completed");
+            // A successful booking whose status fails to persist stays `running`,
+            // and crash recovery would later re-fire it (a double-book) — so a
+            // failed write here must be loud, not silent.
+            if let Err(e) = set_status(db, job.id, JobStatus::Completed, None).await {
+                error!(
+                    job_id = job.id,
+                    "booking succeeded but marking completed failed: {e}"
+                );
+            }
+            if let Err(e) = mark_completed(db, job.id).await {
+                error!(
+                    job_id = job.id,
+                    "booking succeeded but setting completed_at failed: {e}"
+                );
+            }
             notify(
                 db,
                 mailer,
@@ -323,9 +341,18 @@ async fn arm_and_run_job(
             .await;
         }
         Err(e) => {
-            let msg = e.to_string();
-            if job.attempts + 1 >= job.max_attempts {
-                let _ = set_status(db, job.id, JobStatus::Failed, Some(&msg)).await;
+            let msg = e.message().to_string();
+            if should_requeue(e.is_terminal(), job.attempts, job.max_attempts) {
+                // Back to pending so the dispatcher re-arms it on a later tick.
+                // No email yet — it'll retry.
+                if let Err(db_err) = increment_attempts(db, job.id, &msg).await {
+                    error!(job_id = job.id, "failed to requeue job for retry: {db_err}");
+                }
+            } else {
+                // Terminal failure, or out of attempts: record it and notify.
+                if let Err(db_err) = set_status(db, job.id, JobStatus::Failed, Some(&msg)).await {
+                    error!(job_id = job.id, "failed to mark job failed: {db_err}");
+                }
                 notify(
                     db,
                     mailer,
@@ -337,10 +364,6 @@ async fn arm_and_run_job(
                     Err(msg),
                 )
                 .await;
-            } else {
-                // Back to pending so the dispatcher re-arms it on a later tick.
-                // No email yet — it'll retry.
-                let _ = increment_attempts(db, job.id, &msg).await;
             }
         }
     }
@@ -399,6 +422,35 @@ async fn notify(
     }
 }
 
+/// Why a firing attempt ended without a booking, carrying whether re-arming the
+/// job could plausibly change the outcome.
+enum FireError {
+    /// Permanent: re-arming won't help (already booked, ineligible).
+    Terminal(String),
+    /// Transient: worth re-arming on a later tick (retry window elapsed, a
+    /// login/network hiccup).
+    Retryable(String),
+}
+
+impl FireError {
+    fn message(&self) -> &str {
+        match self {
+            FireError::Terminal(m) | FireError::Retryable(m) => m,
+        }
+    }
+
+    fn is_terminal(&self) -> bool {
+        matches!(self, FireError::Terminal(_))
+    }
+}
+
+/// Decide whether a failed firing should be re-armed for another attempt.
+/// Terminal failures never re-arm; retryable ones re-arm until the attempt
+/// budget is spent. Pure so the re-arm policy can be unit-tested.
+fn should_requeue(is_terminal: bool, attempts: i64, max_attempts: i64) -> bool {
+    !is_terminal && attempts + 1 < max_attempts
+}
+
 /// Pre-authenticate, sleep until the exact firing moment, then book with rapid
 /// retry. In dry-run the network calls are replaced with logs but the real
 /// timing still happens, so the firing path is exercised safely.
@@ -407,7 +459,7 @@ async fn fire_booking(
     dry_run: bool,
     booking: &BookingJobData,
     target: DateTime<Utc>,
-) -> anyhow::Result<()> {
+) -> Result<(), FireError> {
     let group = booking.booking_group_id;
 
     // 1. Sleep to the pre-auth point and log in (fresh cookies before the race).
@@ -415,14 +467,18 @@ async fn fire_booking(
     if dry_run {
         info!("[DRY RUN] would log in (pre-auth) for group {group}");
     } else {
-        client.login().await?;
+        // A pre-auth hiccup is transient — let the job re-arm and try again.
+        client
+            .login()
+            .await
+            .map_err(|e| FireError::Retryable(format!("pre-auth login failed: {e}")))?;
     }
 
     // 2. Sleep to the exact firing moment.
     sleep_until(target, 0).await;
 
     // 3. Fire, retrying rapidly until the retry window elapses.
-    let deadline = Utc::now() + chrono::Duration::from_std(RETRY_WINDOW)?;
+    let deadline = Utc::now() + chrono::Duration::milliseconds(RETRY_WINDOW.as_millis() as i64);
     let mut attempt = 0u32;
     loop {
         attempt += 1;
@@ -432,14 +488,16 @@ async fn fire_booking(
         }
         match client.book(group).await {
             Ok(()) => return Ok(()),
-            // Terminal errors (already booked, ineligible) won't change on retry.
-            Err(e) if !e.is_retryable() => {
-                return Err(anyhow::anyhow!("{e}"));
-            }
+            // Terminal errors (already booked, ineligible) won't change on retry —
+            // surface that so the job fails now instead of being re-armed in vain.
+            Err(e) if !e.is_retryable() => return Err(FireError::Terminal(e.to_string())),
             Err(e) => {
                 if Utc::now() >= deadline {
-                    return Err(anyhow::anyhow!("{e}")
-                        .context(format!("gave up after {attempt} attempt(s)")));
+                    // The window elapsed without success; the sheet may open a touch
+                    // late, so this is worth re-arming for another burst.
+                    return Err(FireError::Retryable(format!(
+                        "{e} (gave up after {attempt} attempt(s))"
+                    )));
                 }
                 warn!("booking attempt {attempt} for group {group} failed: {e} — retrying");
                 sleep(RETRY_INTERVAL).await;
@@ -542,6 +600,19 @@ mod tests {
         // Within the pre-auth lead of the target -> also already due.
         let soon = now + chrono::Duration::seconds(10);
         assert!(delay_until(soon, PREAUTH_LEAD_SECS, now).is_none());
+    }
+
+    #[test]
+    fn requeues_retryable_until_attempts_exhausted() {
+        // Retryable failure with attempts to spare -> re-arm.
+        assert!(should_requeue(false, 0, 3));
+        assert!(should_requeue(false, 1, 3));
+        // Final attempt used -> stop re-arming.
+        assert!(!should_requeue(false, 2, 3));
+        // Terminal failure -> never re-arm, even with attempts left.
+        assert!(!should_requeue(true, 0, 3));
+        // A single-shot budget fires once and stops.
+        assert!(!should_requeue(false, 0, 1));
     }
 
     #[test]

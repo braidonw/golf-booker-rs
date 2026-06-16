@@ -120,6 +120,9 @@ mod tests {
         let dbg = format!("{:?}", smtp_config("me@example.com"));
         assert!(!dbg.contains("hunter2-secret"), "password leaked: {dbg}");
         assert!(!dbg.contains("secret-login"), "username leaked: {dbg}");
-        assert!(dbg.contains("me@example.com"), "from should be shown: {dbg}");
+        assert!(
+            dbg.contains("me@example.com"),
+            "from should be shown: {dbg}"
+        );
     }
 }

@@ -154,6 +154,14 @@ h3 {
 .badge[data-status="cancelled"] {
   color: var(--color-text-quieter);
 }
+/* Provisional slot categories derived from the MiClub StatusCode. Unconfirmed
+   mapping — distinct from the status pills above so it reads as a label, not a
+   booking state. See BookingGroup::category_label. */
+.badge[data-kind="competition"] {
+  background: var(--color-fill-loud);
+  color: var(--color-on-loud);
+  border-color: transparent;
+}
 
 /* ---------- Alerts (status colours) ---------- */
 .alert[data-variant="success"] {
