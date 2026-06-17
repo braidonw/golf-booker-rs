@@ -1,5 +1,25 @@
 //! Runtime configuration, sourced from environment variables.
 
+/// Parse a boolean environment variable leniently, returning `default` when the
+/// variable is unset. Recognises `false`/`0`/`no`/`off` (and their `true`
+/// counterparts) case-insensitively and ignores surrounding whitespace, so a
+/// stray `COOKIE_SECURE=False` doesn't silently keep the opposite value.
+fn env_bool(name: &str, default: bool) -> bool {
+    match std::env::var(name) {
+        Ok(raw) => match raw.trim().to_ascii_lowercase().as_str() {
+            "false" | "0" | "no" | "off" => false,
+            "true" | "1" | "yes" | "on" => true,
+            // An unrecognised value falls back to the default rather than
+            // guessing — paired with a warning so a typo is visible.
+            other => {
+                tracing::warn!("{name}: unrecognised boolean value {other:?}; using {default}");
+                default
+            }
+        },
+        Err(_) => default,
+    }
+}
+
 /// Application configuration resolved once at startup.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -79,14 +99,10 @@ impl Config {
             .unwrap_or(3000);
 
         // Dry-run unless explicitly disabled, so real bookings are always opt-in.
-        let dry_run = std::env::var("DRY_RUN")
-            .map(|v| v != "false" && v != "0")
-            .unwrap_or(true);
+        let dry_run = env_bool("DRY_RUN", true);
 
         // Secure by default; only disabled explicitly for local HTTP dev.
-        let cookie_secure = std::env::var("COOKIE_SECURE")
-            .map(|v| v != "false" && v != "0")
-            .unwrap_or(true);
+        let cookie_secure = env_bool("COOKIE_SECURE", true);
 
         let base_url = std::env::var("APP_BASE_URL")
             .unwrap_or_else(|_| format!("http://localhost:{port}"))
@@ -101,5 +117,50 @@ impl Config {
             base_url,
             smtp: SmtpConfig::from_env(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::env_bool;
+
+    // Each test uses a unique var name so the shared process environment can't
+    // race across parallel tests.
+    #[test]
+    fn unset_uses_default() {
+        assert!(env_bool("CFG_TEST_UNSET", true));
+        assert!(!env_bool("CFG_TEST_UNSET", false));
+    }
+
+    #[test]
+    fn recognises_falsey_values_case_insensitively() {
+        for v in ["false", "False", "FALSE", "0", "no", "NO", "off", " off "] {
+            std::env::set_var("CFG_TEST_FALSEY", v);
+            assert!(
+                !env_bool("CFG_TEST_FALSEY", true),
+                "expected false for {v:?}"
+            );
+        }
+        std::env::remove_var("CFG_TEST_FALSEY");
+    }
+
+    #[test]
+    fn recognises_truthy_values_case_insensitively() {
+        for v in ["true", "True", "1", "yes", "on", " ON "] {
+            std::env::set_var("CFG_TEST_TRUTHY", v);
+            assert!(
+                env_bool("CFG_TEST_TRUTHY", false),
+                "expected true for {v:?}"
+            );
+        }
+        std::env::remove_var("CFG_TEST_TRUTHY");
+    }
+
+    #[test]
+    fn unrecognised_value_falls_back_to_default() {
+        std::env::set_var("CFG_TEST_GARBAGE", "maybe");
+        assert!(env_bool("CFG_TEST_GARBAGE", true));
+        assert!(!env_bool("CFG_TEST_GARBAGE", false));
+        std::env::remove_var("CFG_TEST_GARBAGE");
     }
 }
