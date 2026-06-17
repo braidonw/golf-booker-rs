@@ -178,7 +178,25 @@ impl GolfClient {
             .await
             .map_err(|e| BookingError::Retryable(format!("reading response failed: {e}")))?;
 
+        // We infer success from the *absence* of an error document (see
+        // `interpret_booking_response`), because the club's success body isn't
+        // pinned down. Log a truncated copy so the first real `DRY_RUN=false`
+        // booking captures what success actually looks like, and we can later
+        // assert a positive marker. Off by default (debug level).
+        tracing::debug!(response = %truncate(&body, 600), "booking response body");
+
         interpret_booking_response(&body)
+    }
+}
+
+/// Shorten a response body for logging without dumping an entire HTML page.
+/// Counts characters (not bytes) so it never splits a UTF-8 boundary.
+fn truncate(s: &str, max_chars: usize) -> std::borrow::Cow<'_, str> {
+    if s.chars().count() <= max_chars {
+        std::borrow::Cow::Borrowed(s)
+    } else {
+        let head: String = s.chars().take(max_chars).collect();
+        std::borrow::Cow::Owned(format!("{head}… ({} bytes total)", s.len()))
     }
 }
 
@@ -251,6 +269,16 @@ fn interpret_booking_response(body: &str) -> Result<(), BookingError> {
             "booking returned a login/HTML page — session likely expired".to_string(),
         ));
     }
+    // An empty/whitespace body is not a confirmed booking. MiClub signals both
+    // success and failure with an XML document, so a blank response is far more
+    // likely a dropped or proxied request than a real booking — retry rather
+    // than record a booking that may not have happened. (If a live smoke test
+    // shows success really is an empty 200, revisit this.)
+    if body.trim().is_empty() {
+        return Err(BookingError::Retryable(
+            "booking returned an empty response".to_string(),
+        ));
+    }
     Ok(())
 }
 
@@ -259,7 +287,11 @@ fn interpret_booking_response(body: &str) -> Result<(), BookingError> {
 /// the club bounces us to login.
 fn looks_like_login_page(body: &str) -> bool {
     let lower = body.to_lowercase();
-    lower.contains("<html") || lower.contains("login.msp") || lower.contains("<!doctype")
+    lower.contains("<html")
+        || lower.contains("<!doctype")
+        // MiClub's login form, and Spring Security's default login endpoint.
+        || lower.contains("login.msp")
+        || lower.contains("j_security_check")
 }
 
 /// Extract a booking error message from a response body, if it is one. Returns
@@ -363,5 +395,33 @@ mod tests {
                 "expected retryable: {msg}"
             );
         }
+    }
+
+    #[test]
+    fn empty_response_is_retryable_not_booked() {
+        // A blank body is not a confirmed booking — treating it as success could
+        // record a booking that never happened.
+        for body in ["", "   ", "\n\t  \n"] {
+            let err = interpret_booking_response(body)
+                .expect_err("empty body must not count as a booking");
+            assert!(err.is_retryable(), "expected retryable for {body:?}");
+        }
+    }
+
+    #[test]
+    fn detects_spring_security_login_redirect() {
+        let body = "<html><form action=\"/j_security_check\" method=\"post\"></form></html>";
+        let err = interpret_booking_response(body).expect_err("login redirect is not a booking");
+        assert!(err.is_retryable());
+    }
+
+    #[test]
+    fn truncate_is_char_safe_and_bounded() {
+        assert_eq!(truncate("short", 600), "short");
+        // Multi-byte characters must not be split mid-codepoint.
+        let long = "é".repeat(1000);
+        let out = truncate(&long, 10);
+        assert!(out.starts_with(&"é".repeat(10)));
+        assert!(out.contains("bytes total"));
     }
 }
