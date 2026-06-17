@@ -61,6 +61,24 @@ impl AppState {
     pub async fn invalidate_club_client(&self, club_id: i64) {
         self.club_clients.lock().await.remove(&club_id);
     }
+
+    /// Build an `AppState` for tests with an empty client cache (the cache field
+    /// is private, so tests can't use a struct literal).
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        db: SqlitePool,
+        config: Config,
+        scheduler: JobScheduler,
+        mailer: Mailer,
+    ) -> Self {
+        Self {
+            db,
+            config,
+            scheduler,
+            mailer,
+            club_clients: Mutex::new(HashMap::new()),
+        }
+    }
 }
 
 /// Owns startup-time resources before the server is launched.
@@ -70,6 +88,38 @@ pub struct App {
 
 async fn health() -> &'static str {
     "ok"
+}
+
+/// Assemble the full application router with session + auth layering. Shared by
+/// [`App::serve`] and the integration tests, so the tests exercise the real
+/// routing, the login gate, and the public/private split — not a stand-in.
+pub(crate) async fn build_router(state: Arc<AppState>) -> anyhow::Result<Router> {
+    // Persistent session store (survives restarts), sharing our pool.
+    let session_store = SqliteStore::new(state.db.clone());
+    session_store.migrate().await?;
+    let session_layer = SessionManagerLayer::new(session_store)
+        .with_secure(state.config.cookie_secure)
+        .with_http_only(true)
+        .with_same_site(SameSite::Lax)
+        .with_expiry(Expiry::OnInactivity(Duration::days(7)));
+
+    // Auth layer: combines sessions with our credential backend. The layer is
+    // infallible, so no HandleError wrapper is needed.
+    let backend = Backend::new(state.db.clone());
+    let auth_layer = AuthManagerLayerBuilder::new(backend, session_layer).build();
+
+    Ok(Router::new()
+        .merge(protected::router(state.clone()))
+        .merge(clubs::router(state.clone()))
+        .merge(events::router(state.clone()))
+        .merge(jobs::router(state.clone()))
+        .merge(users::router(state.clone()))
+        .route_layer(login_required!(Backend, login_url = "/login"))
+        .merge(auth::router(state.clone()))
+        .route("/health", get(health))
+        .nest_service("/assets", ServeDir::new("assets"))
+        .layer(auth_layer)
+        .layer(TraceLayer::new_for_http()))
 }
 
 impl App {
@@ -105,37 +155,11 @@ impl App {
 
     pub async fn serve(self) -> anyhow::Result<()> {
         let port = self.state.config.port;
-        let db = self.state.db.clone();
 
         // Launch the background scheduler dispatcher.
         self.state.scheduler.start().await;
 
-        // Persistent session store (survives restarts), sharing our pool.
-        let session_store = SqliteStore::new(db.clone());
-        session_store.migrate().await?;
-        let session_layer = SessionManagerLayer::new(session_store)
-            .with_secure(self.state.config.cookie_secure)
-            .with_http_only(true)
-            .with_same_site(SameSite::Lax)
-            .with_expiry(Expiry::OnInactivity(Duration::days(7)));
-
-        // Auth layer: combines sessions with our credential backend. The layer
-        // is infallible, so no HandleError wrapper is needed.
-        let backend = Backend::new(db.clone());
-        let auth_layer = AuthManagerLayerBuilder::new(backend, session_layer).build();
-
-        let app = Router::new()
-            .merge(protected::router(self.state.clone()))
-            .merge(clubs::router(self.state.clone()))
-            .merge(events::router(self.state.clone()))
-            .merge(jobs::router(self.state.clone()))
-            .merge(users::router(self.state.clone()))
-            .route_layer(login_required!(Backend, login_url = "/login"))
-            .merge(auth::router(self.state.clone()))
-            .route("/health", get(health))
-            .nest_service("/assets", ServeDir::new("assets"))
-            .layer(auth_layer)
-            .layer(TraceLayer::new_for_http());
+        let app = build_router(self.state.clone()).await?;
 
         let addr = SocketAddr::from(([0, 0, 0, 0], port));
         tracing::info!(%addr, "listening");
