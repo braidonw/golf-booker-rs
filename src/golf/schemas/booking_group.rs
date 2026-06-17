@@ -160,3 +160,75 @@ pub struct BookingEntry {
     #[serde(rename(deserialize = "GolfLinkNo"))]
     pub golf_link_no: Option<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn group_with(entries: usize, size: u32) -> BookingGroup {
+        BookingGroup {
+            size,
+            member_accepted: true,
+            booking_entries: BookingEntries {
+                entries: (0..entries).map(|_| BookingEntry::default()).collect(),
+            },
+            ..BookingGroup::default()
+        }
+    }
+
+    #[test]
+    fn holes_prefers_nine_then_eighteen_then_none() {
+        let nine = BookingGroup {
+            nine_holes: true,
+            eighteen_holes: true,
+            ..BookingGroup::default()
+        };
+        assert_eq!(nine.holes(), Some(9));
+        let eighteen = BookingGroup {
+            eighteen_holes: true,
+            ..BookingGroup::default()
+        };
+        assert_eq!(eighteen.holes(), Some(18));
+        assert_eq!(BookingGroup::default().holes(), None);
+    }
+
+    #[test]
+    fn is_full_is_a_seat_count_boundary() {
+        assert!(!group_with(3, 4).is_full());
+        assert!(group_with(4, 4).is_full());
+        // Over-subscribed (defensive): still full.
+        assert!(group_with(5, 4).is_full());
+    }
+
+    #[test]
+    fn schedulable_requires_member_access_and_a_free_seat() {
+        assert!(group_with(2, 4).is_schedulable());
+        // Full slot: not schedulable.
+        assert!(!group_with(4, 4).is_schedulable());
+        // Member-closed slot: not schedulable even with seats free.
+        let closed = BookingGroup {
+            member_accepted: false,
+            ..group_with(0, 4)
+        };
+        assert!(!closed.is_schedulable());
+    }
+
+    #[test]
+    fn category_label_maps_known_codes_only() {
+        let cat = |c| {
+            BookingGroup {
+                status_code: c,
+                ..BookingGroup::default()
+            }
+            .category_label()
+        };
+        assert_eq!(cat(3070), Some("Competition"));
+        assert_eq!(cat(3071), Some("Casual"));
+        assert_eq!(cat(9999), None);
+    }
+
+    #[test]
+    fn requirement_labels_are_empty_when_nothing_required() {
+        assert!(BookingGroup::default().requirement_labels().is_empty());
+    }
+}

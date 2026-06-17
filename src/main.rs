@@ -10,6 +10,9 @@ mod scheduler;
 mod users;
 mod web;
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Load .env in dev; ignored if absent (prod sets real env vars).

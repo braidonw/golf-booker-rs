@@ -171,3 +171,149 @@ pub async fn seed_from_environment(db: &SqlitePool) -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::test_pool;
+
+    async fn make_club(db: &SqlitePool, name: &str) -> i64 {
+        create(
+            db,
+            name,
+            "https://x.test",
+            "user",
+            "pass",
+            "m1",
+            "Australia/Sydney",
+        )
+        .await
+        .expect("create club")
+    }
+
+    #[test]
+    fn debug_redacts_credentials() {
+        let club = Club {
+            id: 1,
+            name: "Test".into(),
+            base_url: "https://x.test".into(),
+            username: "secret-user".into(),
+            password: "secret-pass".into(),
+            member_id: "secret-member".into(),
+            timezone: "Australia/Sydney".into(),
+        };
+        let dbg = format!("{club:?}");
+        assert!(!dbg.contains("secret-user"), "username leaked: {dbg}");
+        assert!(!dbg.contains("secret-pass"), "password leaked: {dbg}");
+        assert!(!dbg.contains("secret-member"), "member_id leaked: {dbg}");
+        // Non-secret fields stay visible.
+        assert!(dbg.contains("Test"));
+        assert!(dbg.contains("Australia/Sydney"));
+    }
+
+    #[tokio::test]
+    async fn create_then_get_roundtrips_all_fields() {
+        let db = test_pool().await;
+        let id = make_club(&db, "Ridge").await;
+
+        let club = get(&db, id).await.unwrap().expect("club exists");
+        assert_eq!(club.name, "Ridge");
+        assert_eq!(club.base_url, "https://x.test");
+        assert_eq!(club.username, "user");
+        assert_eq!(club.password, "pass");
+        assert_eq!(club.member_id, "m1");
+        assert_eq!(club.timezone, "Australia/Sydney");
+    }
+
+    #[tokio::test]
+    async fn get_missing_club_is_none() {
+        let db = test_pool().await;
+        assert!(get(&db, 999).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn list_is_ordered_by_name() {
+        let db = test_pool().await;
+        make_club(&db, "Zebra").await;
+        make_club(&db, "Alpha").await;
+        make_club(&db, "Mango").await;
+
+        let names: Vec<_> = list(&db)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|c| c.name)
+            .collect();
+        assert_eq!(names, ["Alpha", "Mango", "Zebra"]);
+    }
+
+    #[tokio::test]
+    async fn update_with_password_changes_it() {
+        let db = test_pool().await;
+        let id = make_club(&db, "Ridge").await;
+
+        update(
+            &db,
+            id,
+            "Ridge GC",
+            "https://y.test",
+            "user2",
+            Some("newpass"),
+            "m2",
+            "UTC",
+        )
+        .await
+        .unwrap();
+
+        let club = get(&db, id).await.unwrap().unwrap();
+        assert_eq!(club.name, "Ridge GC");
+        assert_eq!(club.username, "user2");
+        assert_eq!(club.password, "newpass");
+        assert_eq!(club.member_id, "m2");
+        assert_eq!(club.timezone, "UTC");
+    }
+
+    #[tokio::test]
+    async fn update_without_password_preserves_it() {
+        let db = test_pool().await;
+        let id = make_club(&db, "Ridge").await;
+
+        // The edit form leaves the password blank to keep the stored one.
+        update(
+            &db,
+            id,
+            "Renamed",
+            "https://y.test",
+            "user2",
+            None,
+            "m2",
+            "UTC",
+        )
+        .await
+        .unwrap();
+
+        let club = get(&db, id).await.unwrap().unwrap();
+        assert_eq!(club.name, "Renamed");
+        assert_eq!(club.username, "user2");
+        assert_eq!(club.password, "pass", "password should be unchanged");
+    }
+
+    #[tokio::test]
+    async fn delete_removes_the_club() {
+        let db = test_pool().await;
+        let id = make_club(&db, "Ridge").await;
+        assert!(any_exist(&db).await.unwrap());
+
+        delete(&db, id).await.unwrap();
+        assert!(get(&db, id).await.unwrap().is_none());
+        assert!(!any_exist(&db).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn any_exist_reflects_table_state() {
+        let db = test_pool().await;
+        assert!(!any_exist(&db).await.unwrap());
+        make_club(&db, "Ridge").await;
+        assert!(any_exist(&db).await.unwrap());
+    }
+}

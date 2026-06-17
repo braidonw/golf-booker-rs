@@ -292,6 +292,7 @@ pub async fn seed_from_environment(db: &SqlitePool) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::test_pool;
 
     #[test]
     fn token_hash_is_stable_and_distinct() {
@@ -299,5 +300,161 @@ mod tests {
         assert_ne!(hash_token("abc"), hash_token("abd"));
         // SHA-256 hex is 64 chars.
         assert_eq!(hash_token("abc").len(), 64);
+    }
+
+    #[test]
+    fn debug_redacts_password_hash() {
+        let user = User {
+            id: 1,
+            username: "alice".into(),
+            password: "argon2-secret-hash".into(),
+            email: Some("a@b.com".into()),
+        };
+        let dbg = format!("{user:?}");
+        assert!(!dbg.contains("argon2-secret-hash"), "hash leaked: {dbg}");
+        assert!(dbg.contains("alice"));
+        assert!(dbg.contains("a@b.com"));
+    }
+
+    async fn auth(db: &SqlitePool, username: &str, password: &str) -> Option<User> {
+        Backend::new(db.clone())
+            .authenticate(Credentials {
+                username: username.to_string(),
+                password: password.to_string(),
+                next: None,
+            })
+            .await
+            .expect("authenticate query")
+    }
+
+    #[tokio::test]
+    async fn authenticate_succeeds_with_correct_password() {
+        let db = test_pool().await;
+        let id = create(&db, "alice", Some("a@b.com"), "correct horse")
+            .await
+            .unwrap();
+
+        let user = auth(&db, "alice", "correct horse")
+            .await
+            .expect("should authenticate");
+        assert_eq!(user.id, id);
+        assert_eq!(user.username, "alice");
+    }
+
+    #[tokio::test]
+    async fn authenticate_rejects_wrong_password() {
+        let db = test_pool().await;
+        create(&db, "alice", None, "correct horse").await.unwrap();
+        assert!(auth(&db, "alice", "wrong").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn authenticate_rejects_unknown_user() {
+        let db = test_pool().await;
+        // No users exist: still returns None without erroring (constant-time path).
+        assert!(auth(&db, "nobody", "whatever").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_user_fetches_by_id() {
+        let db = test_pool().await;
+        let id = create(&db, "alice", None, "password1").await.unwrap();
+        let backend = Backend::new(db.clone());
+        let user = backend.get_user(&id).await.unwrap().expect("user exists");
+        assert_eq!(user.username, "alice");
+        assert!(backend.get_user(&9999).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn set_password_changes_login_and_invalidates_old() {
+        let db = test_pool().await;
+        let id = create(&db, "alice", None, "oldpassword").await.unwrap();
+
+        set_password(&db, id, "newpassword").await.unwrap();
+
+        assert!(auth(&db, "alice", "newpassword").await.is_some());
+        assert!(auth(&db, "alice", "oldpassword").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn count_list_and_delete() {
+        let db = test_pool().await;
+        assert!(!any_exist(&db).await.unwrap());
+        let a = create(&db, "alice", None, "password1").await.unwrap();
+        create(&db, "bob", None, "password2").await.unwrap();
+
+        assert_eq!(count(&db).await.unwrap(), 2);
+        assert!(any_exist(&db).await.unwrap());
+        let listed: Vec<_> = list(&db)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|u| u.username)
+            .collect();
+        assert_eq!(listed, ["alice", "bob"]); // ordered by username
+
+        delete(&db, a).await.unwrap();
+        assert_eq!(count(&db).await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn email_lookups() {
+        let db = test_pool().await;
+        let id = create(&db, "alice", Some("a@b.com"), "password1")
+            .await
+            .unwrap();
+        create(&db, "bob", None, "password2").await.unwrap();
+
+        assert_eq!(id_for_email(&db, "a@b.com").await.unwrap(), Some(id));
+        assert_eq!(id_for_email(&db, "missing@b.com").await.unwrap(), None);
+        assert_eq!(
+            email_for(&db, id).await.unwrap().as_deref(),
+            Some("a@b.com")
+        );
+        // A user with no email yields None, not an error.
+        let bob = id_for_email(&db, "a@b.com").await.unwrap();
+        assert!(bob.is_some());
+    }
+
+    #[tokio::test]
+    async fn reset_token_can_be_consumed_once() {
+        let db = test_pool().await;
+        let id = create(&db, "alice", Some("a@b.com"), "password1")
+            .await
+            .unwrap();
+
+        let raw = create_reset_token(&db, id).await.unwrap();
+        // Valid token returns the owning user id...
+        assert_eq!(consume_reset_token(&db, &raw).await.unwrap(), Some(id));
+        // ...and is single-use: a second redemption fails.
+        assert_eq!(consume_reset_token(&db, &raw).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn unknown_reset_token_is_rejected() {
+        let db = test_pool().await;
+        create(&db, "alice", None, "password1").await.unwrap();
+        assert_eq!(consume_reset_token(&db, "deadbeef").await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn expired_reset_token_is_rejected() {
+        let db = test_pool().await;
+        let id = create(&db, "alice", None, "password1").await.unwrap();
+
+        // Insert a token that expired an hour ago.
+        let raw = "raw-token-value";
+        let past = (Utc::now() - Duration::hours(1)).to_rfc3339();
+        sqlx::query(
+            "INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES (?, ?, ?)",
+        )
+        .bind(id)
+        .bind(hash_token(raw))
+        .bind(past)
+        .execute(&db)
+        .await
+        .unwrap();
+
+        assert_eq!(consume_reset_token(&db, raw).await.unwrap(), None);
     }
 }

@@ -211,3 +211,28 @@ mod post {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::safe_next;
+
+    #[test]
+    fn accepts_same_origin_relative_paths() {
+        assert_eq!(safe_next(Some("/clubs")).as_deref(), Some("/clubs"));
+        assert_eq!(
+            safe_next(Some("/scheduled-jobs?x=1")).as_deref(),
+            Some("/scheduled-jobs?x=1")
+        );
+    }
+
+    #[test]
+    fn rejects_open_redirect_targets() {
+        // Protocol-relative and backslash tricks would redirect off-site.
+        assert_eq!(safe_next(Some("//evil.com")), None);
+        assert_eq!(safe_next(Some("/\\evil.com")), None);
+        // Absolute URLs and non-rooted paths are not same-origin relative.
+        assert_eq!(safe_next(Some("https://evil.com")), None);
+        assert_eq!(safe_next(Some("evil.com")), None);
+        assert_eq!(safe_next(None), None);
+    }
+}

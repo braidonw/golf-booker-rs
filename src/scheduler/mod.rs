@@ -628,4 +628,171 @@ mod tests {
         assert_eq!(b.event_id, 101);
         assert_eq!(b.booking_group_id, 5001);
     }
+
+    // --- DB-backed tests -------------------------------------------------
+
+    use crate::email::Mailer;
+    use crate::test_support::{seed_club, seed_user, test_pool};
+
+    /// A scheduler over an in-memory DB (dry-run, mailer disabled), plus a
+    /// seeded user and club to satisfy the foreign keys.
+    async fn fixture() -> (JobScheduler, i64, i64) {
+        let db = test_pool().await;
+        let user_id = seed_user(&db, "alice").await;
+        let club_id = seed_club(&db, "Ridge").await;
+        let mailer = Mailer::from_config(None).unwrap();
+        let scheduler = JobScheduler::new(db, true, mailer, "http://localhost".to_string());
+        (scheduler, user_id, club_id)
+    }
+
+    fn future() -> DateTime<Utc> {
+        Utc::now() + chrono::Duration::hours(1)
+    }
+
+    #[tokio::test]
+    async fn schedule_then_list_returns_the_job() {
+        let (sched, user_id, club_id) = fixture().await;
+        let id = sched
+            .schedule_booking(user_id, club_id, 101, 5001, future())
+            .await
+            .unwrap();
+
+        let jobs = sched.get_user_jobs(user_id).await.unwrap();
+        assert_eq!(jobs.len(), 1);
+        let job = &jobs[0];
+        assert_eq!(job.id, id);
+        assert_eq!(job.status, "pending");
+        assert_eq!(job.club_id, Some(club_id));
+        assert_eq!(job.event_id, Some(101));
+        assert_eq!(job.max_attempts, 3);
+        assert_eq!(job.attempts, 0);
+        // job_data deserializes back to the booking parameters.
+        let JobData::Booking(b) = job.job_data().unwrap();
+        assert_eq!(b.booking_group_id, 5001);
+    }
+
+    #[tokio::test]
+    async fn user_only_sees_their_own_jobs() {
+        let (sched, alice, club_id) = fixture().await;
+        let bob = seed_user(&sched.db, "bob").await;
+        sched
+            .schedule_booking(alice, club_id, 1, 1, future())
+            .await
+            .unwrap();
+        sched
+            .schedule_booking(bob, club_id, 2, 2, future())
+            .await
+            .unwrap();
+
+        assert_eq!(sched.get_user_jobs(alice).await.unwrap().len(), 1);
+        assert_eq!(sched.get_user_jobs(bob).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn cancel_only_affects_owners_pending_job() {
+        let (sched, alice, club_id) = fixture().await;
+        let bob = seed_user(&sched.db, "bob").await;
+        let id = sched
+            .schedule_booking(alice, club_id, 1, 1, future())
+            .await
+            .unwrap();
+
+        // Wrong owner can't cancel.
+        assert!(!sched.cancel_job(bob, id).await.unwrap());
+        // Owner cancels; row flips to cancelled.
+        assert!(sched.cancel_job(alice, id).await.unwrap());
+        assert_eq!(
+            sched.get_user_jobs(alice).await.unwrap()[0].status,
+            "cancelled"
+        );
+        // A second cancel is a no-op (no longer pending).
+        assert!(!sched.cancel_job(alice, id).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn claim_job_is_atomic() {
+        let (sched, user_id, club_id) = fixture().await;
+        let id = sched
+            .schedule_booking(user_id, club_id, 1, 1, future())
+            .await
+            .unwrap();
+
+        // First claim wins (pending -> running); second finds it already running.
+        assert!(claim_job(&sched.db, id).await.unwrap());
+        assert!(!claim_job(&sched.db, id).await.unwrap());
+        assert_eq!(
+            sched.get_user_jobs(user_id).await.unwrap()[0].status,
+            "running"
+        );
+    }
+
+    #[tokio::test]
+    async fn requeue_stranded_resets_running_to_pending() {
+        let (sched, user_id, club_id) = fixture().await;
+        let id = sched
+            .schedule_booking(user_id, club_id, 1, 1, future())
+            .await
+            .unwrap();
+        claim_job(&sched.db, id).await.unwrap();
+
+        requeue_stranded_jobs(&sched.db).await.unwrap();
+        assert_eq!(
+            sched.get_user_jobs(user_id).await.unwrap()[0].status,
+            "pending"
+        );
+    }
+
+    #[tokio::test]
+    async fn increment_attempts_bumps_count_and_requeues() {
+        let (sched, user_id, club_id) = fixture().await;
+        let id = sched
+            .schedule_booking(user_id, club_id, 1, 1, future())
+            .await
+            .unwrap();
+        claim_job(&sched.db, id).await.unwrap();
+
+        increment_attempts(&sched.db, id, "sheet not open yet")
+            .await
+            .unwrap();
+        let job = &sched.get_user_jobs(user_id).await.unwrap()[0];
+        assert_eq!(job.attempts, 1);
+        assert_eq!(job.status, "pending");
+        assert_eq!(job.last_error.as_deref(), Some("sheet not open yet"));
+    }
+
+    #[tokio::test]
+    async fn set_status_and_mark_completed_persist() {
+        let (sched, user_id, club_id) = fixture().await;
+        let id = sched
+            .schedule_booking(user_id, club_id, 1, 1, future())
+            .await
+            .unwrap();
+
+        set_status(&sched.db, id, JobStatus::Failed, Some("boom"))
+            .await
+            .unwrap();
+        let job = &sched.get_user_jobs(user_id).await.unwrap()[0];
+        assert_eq!(job.status, "failed");
+        assert_eq!(job.last_error.as_deref(), Some("boom"));
+        assert!(job.completed_at.is_none());
+
+        mark_completed(&sched.db, id).await.unwrap();
+        assert!(sched.get_user_jobs(user_id).await.unwrap()[0]
+            .completed_at
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn deleting_a_club_nulls_the_jobs_club_id() {
+        // ON DELETE SET NULL: a scheduled job survives its club being removed,
+        // and the scheduler later fails it with "club was removed".
+        let (sched, user_id, club_id) = fixture().await;
+        sched
+            .schedule_booking(user_id, club_id, 1, 1, future())
+            .await
+            .unwrap();
+
+        crate::clubs::delete(&sched.db, club_id).await.unwrap();
+        assert_eq!(sched.get_user_jobs(user_id).await.unwrap()[0].club_id, None);
+    }
 }
