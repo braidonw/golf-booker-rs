@@ -3,6 +3,7 @@
 
 use super::app::AppState;
 use crate::error::AppError;
+use crate::golf::GolfClient;
 use crate::scheduler::JobData;
 use crate::users::AuthSession;
 use crate::web::render;
@@ -85,6 +86,23 @@ fn utc_to_local_display(rfc3339: &str, tz: Tz) -> String {
                 .to_string()
         })
         .unwrap_or_else(|_| rfc3339.to_string())
+}
+
+/// Whether a slot is *known* to be unbookable right now (full, or it doesn't
+/// accept members). Returns `false` on any login/fetch failure or if the group
+/// can't be found — only a confirmed "can't be scheduled" blocks creation, so a
+/// transient club error never stops a user scheduling ahead of time.
+async fn slot_unschedulable(club: &crate::clubs::Club, event_id: u32, group_id: u32) -> bool {
+    let client = GolfClient::from_club(club);
+    if client.login().await.is_err() {
+        return false;
+    }
+    match client.get_event(event_id).await {
+        Ok(event) => event
+            .find_group(group_id)
+            .is_some_and(|g| !g.is_schedulable()),
+        Err(_) => false,
+    }
 }
 
 /// A scheduled job rendered to the list.
@@ -198,6 +216,15 @@ mod post {
         };
         if when_utc <= Utc::now() {
             return Ok(back("past"));
+        }
+
+        // Best-effort: reject a slot that already can't be booked (full, or
+        // doesn't accept members), so a stale page gives feedback now instead of
+        // a job that's guaranteed to fail at fire time. A fetch/login failure is
+        // not a refusal — let fire time be the source of truth rather than block
+        // scheduling on a transient club outage.
+        if slot_unschedulable(&club, form.event_id as u32, form.booking_group_id).await {
+            return Ok(back("notschedulable"));
         }
 
         state
