@@ -120,11 +120,17 @@ impl GolfClient {
     }
 
     /// Fetch the list metadata for one event (category, type, gender, auto-open
-    /// time, …), by finding it in the events list. `None` if it's outside the
-    /// listing window.
-    pub async fn get_event_meta(&self, event_id: u32) -> anyhow::Result<Option<GolfEvent>> {
+    /// time, …) by querying only its own day, rather than scanning the full
+    /// default window. Callers already hold the event's booking sheet (from
+    /// [`get_event`]), which carries its date. `None` if the event isn't in that
+    /// day's listing.
+    pub async fn get_event_meta_on(
+        &self,
+        event_id: u32,
+        date: chrono::NaiveDate,
+    ) -> anyhow::Result<Option<GolfEvent>> {
         Ok(self
-            .get_events()
+            .get_events_between(date, date)
             .await?
             .into_iter()
             .find(|e| e.id == event_id))
