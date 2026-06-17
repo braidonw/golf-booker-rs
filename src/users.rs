@@ -220,7 +220,20 @@ pub async fn create_reset_token(db: &SqlitePool, user_id: i64) -> Result<String,
     let mut bytes = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut bytes);
     let raw = hex::encode(bytes);
+    let now = Utc::now().to_rfc3339();
     let expires = (Utc::now() + Duration::hours(RESET_TOKEN_TTL_HOURS)).to_rfc3339();
+
+    // Issuing a fresh link supersedes the user's earlier tokens, and is a good
+    // moment to sweep used/expired rows so the table can't grow unbounded. (All
+    // timestamps are `+00:00` RFC3339, so the string `<` is a valid time order.)
+    sqlx::query(
+        "DELETE FROM password_reset_tokens \
+         WHERE user_id = ? OR used_at IS NOT NULL OR expires_at < ?",
+    )
+    .bind(user_id)
+    .bind(&now)
+    .execute(db)
+    .await?;
 
     sqlx::query(
         "INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES (?, ?, ?)",
@@ -435,6 +448,53 @@ mod tests {
         let db = test_pool().await;
         create(&db, "alice", None, "password1").await.unwrap();
         assert_eq!(consume_reset_token(&db, "deadbeef").await.unwrap(), None);
+    }
+
+    async fn token_count(db: &SqlitePool) -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM password_reset_tokens")
+            .fetch_one(db)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn issuing_a_new_token_supersedes_the_previous_one() {
+        let db = test_pool().await;
+        let id = create(&db, "alice", None, "password1").await.unwrap();
+
+        let first = create_reset_token(&db, id).await.unwrap();
+        let second = create_reset_token(&db, id).await.unwrap();
+
+        // Only the latest link works; the earlier one was superseded.
+        assert_eq!(consume_reset_token(&db, &first).await.unwrap(), None);
+        assert_eq!(consume_reset_token(&db, &second).await.unwrap(), Some(id));
+    }
+
+    #[tokio::test]
+    async fn issuing_a_token_sweeps_used_and_expired_rows() {
+        let db = test_pool().await;
+        let alice = create(&db, "alice", None, "password1").await.unwrap();
+        let bob = create(&db, "bob", None, "password2").await.unwrap();
+
+        // An expired token for bob, and a used one — both stale.
+        let past = (Utc::now() - Duration::hours(2)).to_rfc3339();
+        sqlx::query(
+            "INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, used_at) \
+             VALUES (?, 'expired', ?, NULL), (?, 'used', ?, ?)",
+        )
+        .bind(bob)
+        .bind(&past)
+        .bind(bob)
+        .bind((Utc::now() + Duration::hours(1)).to_rfc3339())
+        .bind(Utc::now().to_rfc3339())
+        .execute(&db)
+        .await
+        .unwrap();
+        assert_eq!(token_count(&db).await, 2);
+
+        // Issuing alice's token sweeps both stale rows, leaving only the new one.
+        create_reset_token(&db, alice).await.unwrap();
+        assert_eq!(token_count(&db).await, 1);
     }
 
     #[tokio::test]
