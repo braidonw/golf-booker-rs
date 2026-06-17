@@ -281,6 +281,9 @@ mod get {
                 "past" => "That time is in the past.",
                 "badtime" => "Couldn't read that date/time.",
                 "unknownclub" => "That club no longer exists.",
+                "notschedulable" => {
+                    "That slot can't be scheduled — it's full or doesn't accept member bookings."
+                }
                 _ => "Couldn't schedule that booking.",
             }
             .to_string()
