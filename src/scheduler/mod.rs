@@ -266,11 +266,45 @@ async fn dispatch_due_jobs(
         let db = db.clone();
         let mailer = mailer.clone();
         let base_url = base_url.to_string();
+        let job_id = job.id;
         tokio::spawn(async move {
-            arm_and_run_job(&db, dry_run, &mailer, &base_url, job).await;
+            // Run the job in a nested task and await its handle: if its body
+            // panics, crash recovery only re-queues `running` rows at startup —
+            // which a long-lived process may never reach — so the row would be
+            // stranded `running` forever. Catch the panic here and fail the row.
+            let inner = {
+                let db = db.clone();
+                let mailer = mailer.clone();
+                let base_url = base_url.clone();
+                tokio::spawn(
+                    async move { arm_and_run_job(&db, dry_run, &mailer, &base_url, job).await },
+                )
+            };
+            if let Err(join_err) = inner.await {
+                if join_err.is_panic() {
+                    fail_if_running(&db, job_id, "job task panicked").await;
+                }
+            }
         });
     }
     Ok(())
+}
+
+/// Mark a job failed *only if it is still `running`*, so a panic recovered after
+/// the job already finished (completed/failed) doesn't clobber its real outcome.
+async fn fail_if_running(db: &SqlitePool, job_id: i64, msg: &str) {
+    error!(job_id, "{msg}");
+    let result = sqlx::query(
+        "UPDATE scheduled_jobs SET status = 'failed', last_error = ? \
+         WHERE id = ? AND status = 'running'",
+    )
+    .bind(msg)
+    .bind(job_id)
+    .execute(db)
+    .await;
+    if let Err(e) = result {
+        error!(job_id, "failed to mark panicked job failed: {e}");
+    }
 }
 
 /// Atomically transition a job from `pending` to `running`. Returns whether this
@@ -857,6 +891,41 @@ mod tests {
 
         arm_and_run_job(&sched.db, true, &sched.mailer, &sched.base_url, job).await;
 
+        assert_eq!(
+            sched.get_user_jobs(user_id).await.unwrap()[0].status,
+            "completed"
+        );
+    }
+
+    #[tokio::test]
+    async fn fail_if_running_only_fails_running_jobs() {
+        let (sched, user_id, club_id) = fixture().await;
+        let id = sched
+            .schedule_booking(user_id, club_id, 1, 1, future())
+            .await
+            .unwrap();
+        claim_job(&sched.db, id).await.unwrap();
+
+        // Running -> failed with the panic message.
+        fail_if_running(&sched.db, id, "job task panicked").await;
+        let job = &sched.get_user_jobs(user_id).await.unwrap()[0];
+        assert_eq!(job.status, "failed");
+        assert_eq!(job.last_error.as_deref(), Some("job task panicked"));
+    }
+
+    #[tokio::test]
+    async fn fail_if_running_does_not_clobber_completed_jobs() {
+        let (sched, user_id, club_id) = fixture().await;
+        let id = sched
+            .schedule_booking(user_id, club_id, 1, 1, future())
+            .await
+            .unwrap();
+        set_status(&sched.db, id, JobStatus::Completed, None)
+            .await
+            .unwrap();
+
+        // A panic recovered after the job already completed must not overwrite it.
+        fail_if_running(&sched.db, id, "job task panicked").await;
         assert_eq!(
             sched.get_user_jobs(user_id).await.unwrap()[0].status,
             "completed"
