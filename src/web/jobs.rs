@@ -45,13 +45,33 @@ fn parse_local_datetime(value: &str) -> Option<NaiveDateTime> {
         .ok()
 }
 
-/// Interpret a `datetime-local` value as wall-clock time in `tz` and convert to
-/// UTC. `None` for an unparseable or non-existent local time (spring-forward gap).
+/// Interpret a `datetime-local` value as wall-clock time **in the club's
+/// timezone** and convert to UTC. `None` for an unparseable or non-existent
+/// local time (spring-forward gap).
+///
+/// The reference is deliberately the *club's* IANA zone, not the user's browser
+/// timezone: a tee sheet opens at the club's local time, and the operator may
+/// schedule a club in a different zone than they're sitting in (e.g. a Sydney
+/// club from London). Sending the browser's time/offset up would book at the
+/// wrong instant whenever the two zones differ, so the club zone is authoritative.
 fn local_to_utc(value: &str, tz: Tz) -> Option<DateTime<Utc>> {
     let naive = parse_local_datetime(value)?;
     match tz.from_local_datetime(&naive) {
         chrono::LocalResult::Single(dt) => Some(dt.with_timezone(&Utc)),
-        chrono::LocalResult::Ambiguous(dt, _) => Some(dt.with_timezone(&Utc)),
+        // DST fall-back: this wall-clock time occurs twice. Fire at the earlier
+        // of the two instants — for a booking race, being early is harmless
+        // (we pre-auth and wait), being late forfeits it. Chosen explicitly
+        // rather than relying on the tuple order.
+        chrono::LocalResult::Ambiguous(a, b) => {
+            let earlier = a.min(b).with_timezone(&Utc);
+            tracing::warn!(
+                local = %naive, tz = %tz, chosen = %earlier,
+                "ambiguous local time (DST fall-back) — using the earlier instant"
+            );
+            Some(earlier)
+        }
+        // DST spring-forward gap: this wall-clock time never occurs, so there is
+        // no instant to schedule. The caller surfaces this as a "bad time" error.
         chrono::LocalResult::None => None,
     }
 }
@@ -234,6 +254,22 @@ mod tests {
     #[test]
     fn rejects_unparseable_time() {
         assert!(local_to_utc("not-a-time", Tz::UTC).is_none());
+    }
+
+    #[test]
+    fn ambiguous_fall_back_time_picks_the_earlier_instant() {
+        // Australia/Sydney DST ends 05 Apr 2026: at 03:00 AEDT clocks fall back
+        // to 02:00 AEST, so 02:30 occurs twice. The earlier instant is the AEDT
+        // (UTC+11) one: 02:30 +11 == 15:30 UTC the previous day.
+        let utc = local_to_utc("2026-04-05T02:30", Tz::Australia__Sydney).unwrap();
+        assert_eq!(utc.to_rfc3339(), "2026-04-04T15:30:00+00:00");
+    }
+
+    #[test]
+    fn spring_forward_gap_time_is_rejected() {
+        // Australia/Sydney DST starts 04 Oct 2026: at 02:00 AEST clocks jump to
+        // 03:00 AEDT, so 02:30 never exists that day.
+        assert!(local_to_utc("2026-10-04T02:30", Tz::Australia__Sydney).is_none());
     }
 
     #[test]
