@@ -8,5 +8,8 @@ mod ratelimit;
 mod render;
 mod users;
 
+#[cfg(test)]
+mod tests;
+
 pub use app::App;
 pub use render::render;
