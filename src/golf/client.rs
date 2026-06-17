@@ -233,15 +233,22 @@ impl std::error::Error for BookingError {}
 /// messages default to retryable, since during the race "not open yet" is the
 /// common case and retrying is cheap; the retry window bounds the cost.
 fn classify_booking_error(message: &str) -> BookingError {
+    // Booking-specific phrases, not bare ambiguous words. Misclassifying a
+    // transient message as terminal aborts a winnable race, so the markers lean
+    // specific: an unmatched *real* terminal error merely wastes a few cheap
+    // retries before failing, which is the safe direction to err.
     const TERMINAL_MARKERS: &[&str] = &[
-        "already",
+        "already booked",
+        "already have",
         "not eligible",
         "ineligible",
         "not allowed",
+        "not permitted",
         "duplicate",
-        "exceeded",
-        "maximum",
-        "no longer",
+        "booking limit",
+        "exceeded the maximum",
+        "maximum number",
+        "no longer available",
         "permission",
     ];
     let lower = message.to_lowercase();
@@ -423,5 +430,22 @@ mod tests {
         let out = truncate(&long, 10);
         assert!(out.starts_with(&"é".repeat(10)));
         assert!(out.contains("bytes total"));
+    }
+
+    #[test]
+    fn ambiguous_words_alone_are_not_terminal() {
+        // These contain words that used to trip the terminal markers (maximum,
+        // exceeded, no longer) but are plausibly transient — they must stay
+        // retryable so a winnable race isn't abandoned.
+        for msg in [
+            "Server at maximum capacity — please retry",
+            "Gateway timeout exceeded",
+            "Slot is no longer shown but may reopen shortly",
+        ] {
+            assert!(
+                classify_booking_error(msg).is_retryable(),
+                "expected retryable: {msg}"
+            );
+        }
     }
 }
