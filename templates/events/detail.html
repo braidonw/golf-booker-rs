@@ -64,16 +64,17 @@
             <td>
               {% if group.is_full() %}
                 <span class="badge" data-status="pending">Full</span>
+              {% else if !group.accepts_members() %}
+                <span class="club-card__meta">Not bookable</span>
+              {% else if event_open %}
+                {# Sheet is open and the slot has a free member seat — book it now. #}
+                <form method="post"
+                      action="/clubs/{{ club_id }}/events/{{ event.id }}/groups/{{ group.id }}/book">
+                  <button class="button" type="submit">Book now</button>
+                </form>
               {% else %}
-                <span class="cluster" style="--cluster-gap: var(--space-sm);">
-                  {% if group.is_bookable_now() %}
-                    <form method="post"
-                          action="/clubs/{{ club_id }}/events/{{ event.id }}/groups/{{ group.id }}/book">
-                      <button class="button" type="submit">Book now</button>
-                    </form>
-                  {% endif %}
-                  <a class="button" data-variant="secondary" href="/clubs/{{ club_id }}/events/{{ event.id }}/groups/{{ group.id }}/schedule">Schedule</a>
-                </span>
+                {# Sheet isn't open yet — schedule a booking for when it opens. #}
+                <a class="button" data-variant="secondary" href="/clubs/{{ club_id }}/events/{{ event.id }}/groups/{{ group.id }}/schedule">Schedule</a>
               {% endif %}
             </td>
           </tr>

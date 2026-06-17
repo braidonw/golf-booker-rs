@@ -84,16 +84,10 @@ impl BookingGroup {
         self.member_accepted
     }
 
-    /// Bookable *right now*: the sheet is open (`active`), accepts members, and
-    /// has a free seat. A closed sheet — the common case before the tee sheet
-    /// opens — is not bookable now even if empty; that's what scheduling is for.
-    pub fn is_bookable_now(&self) -> bool {
-        self.active && self.accepts_members() && !self.is_full()
-    }
-
-    /// Eligible to schedule a future booking against: it must accept members
-    /// and have a free seat. Unlike [`is_bookable_now`], a currently-closed
-    /// sheet still qualifies, since scheduling races the sheet *open*.
+    /// Has a free seat we could take: accepts members and isn't full. Whether
+    /// we *book it now* or *schedule it* depends on the event-level `is_open`
+    /// flag, decided by the caller — the per-group `active` flag is unreliable
+    /// (it reads `false` even on sheets that are plainly open and being booked).
     pub fn is_schedulable(&self) -> bool {
         self.accepts_members() && !self.is_full()
     }

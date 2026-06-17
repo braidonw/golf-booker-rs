@@ -120,6 +120,11 @@ struct DetailTemplate {
     club_name: String,
     event: BookingEvent,
     summary: Option<EventSummary>,
+    /// Whether the tee sheet is open for booking now (from the event
+    /// metadata). Decides Book-now vs Schedule per slot. Unknown metadata is
+    /// treated as not-open, so we don't offer an immediate booking we can't
+    /// vouch for.
+    event_open: bool,
     flash: Option<Flash>,
 }
 
@@ -140,6 +145,7 @@ async fn render_detail(
         .ok()
         .flatten()
         .map(|m| EventSummary::from(&m));
+    let event_open = summary.as_ref().is_some_and(|s| s.is_open);
 
     Ok(render(&DetailTemplate {
         username,
@@ -147,6 +153,7 @@ async fn render_detail(
         club_name,
         event,
         summary,
+        event_open,
         flash,
     })?
     .into_response())
@@ -366,9 +373,6 @@ mod post {
             Some(g) if g.is_full() => Some("That slot is already full.".to_string()),
             Some(g) if !g.accepts_members() => {
                 Some("That slot doesn't accept member bookings.".to_string())
-            }
-            Some(g) if !g.active => {
-                Some("That tee sheet isn't open for booking yet — schedule it instead.".to_string())
             }
             _ => None,
         }

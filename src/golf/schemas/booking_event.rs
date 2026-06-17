@@ -159,7 +159,7 @@ mod tests {
     }
 
     #[test]
-    fn full_closed_slot_is_neither_bookable_nor_schedulable() {
+    fn full_slot_is_never_bookable_or_schedulable() {
         let event: BookingEvent = quick_xml::de::from_str(SAMPLE).unwrap();
         let groups = event.booking_sections.sections[0]
             .booking_groups
@@ -167,16 +167,15 @@ mod tests {
             .as_ref()
             .unwrap();
 
-        // 4/4 and the sheet is closed: not bookable now, and full means you
-        // can't schedule against it either.
+        // 4/4: full means it can't be booked or scheduled, whether or not the
+        // sheet is open.
         let full = &groups[0];
         assert!(full.is_full());
-        assert!(!full.is_bookable_now());
         assert!(!full.is_schedulable());
     }
 
     #[test]
-    fn open_empty_slot_is_bookable_and_schedulable() {
+    fn free_seat_with_member_access_is_schedulable() {
         let event: BookingEvent = quick_xml::de::from_str(SAMPLE).unwrap();
         let groups = event.booking_sections.sections[0]
             .booking_groups
@@ -184,10 +183,11 @@ mod tests {
             .as_ref()
             .unwrap();
 
-        // Empty seat on an active sheet: bookable now and schedulable.
+        // A free member seat is schedulable; whether it shows Book-now vs
+        // Schedule is the event's `is_open` flag, decided at render time — not
+        // the group's `active` flag (this group is `active=true` but that's moot).
         let open = &groups[1];
         assert!(!open.is_full());
-        assert!(open.is_bookable_now());
         assert!(open.is_schedulable());
     }
 
@@ -208,7 +208,6 @@ mod tests {
         let group: BookingGroup = quick_xml::de::from_str(xml).unwrap();
         assert!(!group.is_full());
         assert!(!group.accepts_members());
-        assert!(!group.is_bookable_now());
         assert!(!group.is_schedulable());
     }
 
