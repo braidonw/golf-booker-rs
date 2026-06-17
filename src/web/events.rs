@@ -61,6 +61,28 @@ async fn load_club(state: &AppState, club_id: i64) -> Result<Club, AppError> {
         .ok_or_else(|| AppError::not_found(anyhow::anyhow!("club {club_id} not found")))
 }
 
+/// Run a read against the club, re-authenticating once if it fails. The cached
+/// client (see `AppState::club_client`) may carry a session that has since
+/// lapsed; a re-login refreshes its shared cookie jar, so the retry — and later
+/// cache hits — succeed. Used only for idempotent reads, never for `book`.
+async fn with_relogin<F, Fut, T>(client: &GolfClient, op: F) -> anyhow::Result<T>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<T>>,
+{
+    match op().await {
+        Ok(value) => Ok(value),
+        Err(first) => {
+            if let Err(e) = client.login().await {
+                return Err(
+                    first.context(format!("re-login after a failed request also failed: {e}"))
+                );
+            }
+            op().await
+        }
+    }
+}
+
 /// A success/error banner shown after a booking attempt.
 struct Flash {
     ok: bool,
@@ -137,10 +159,9 @@ async fn render_detail(
     event_id: u32,
     flash: Option<Flash>,
 ) -> Result<Response, AppError> {
-    let event = client.get_event(event_id).await?;
+    let event = with_relogin(client, || client.get_event(event_id)).await?;
     // Metadata is best-effort — a detail page is still useful without it.
-    let summary = client
-        .get_event_meta(event_id)
+    let summary = with_relogin(client, || client.get_event_meta(event_id))
         .await
         .ok()
         .flatten()
@@ -182,7 +203,7 @@ mod get {
         let clubs = club_links(&state).await?;
 
         // A failure talking to the club shouldn't 500 the page — show it inline.
-        let (events, error) = match fetch_events(&club).await {
+        let (events, error) = match fetch_events(&state, &club).await {
             Ok(events) => (events, None),
             Err(e) => (Vec::new(), Some(e.to_string())),
         };
@@ -204,8 +225,7 @@ mod get {
         Path((club_id, event_id)): Path<(i64, u32)>,
     ) -> Result<Response, AppError> {
         let club = load_club(&state, club_id).await?;
-        let client = GolfClient::from_club(&club);
-        client.login().await?;
+        let client = state.club_client(&club).await?;
         render_detail(
             username_of(&auth),
             club_id,
@@ -250,10 +270,9 @@ mod get {
         Query(q): Query<ScheduleQuery>,
     ) -> Result<Response, AppError> {
         let club = load_club(&state, club_id).await?;
-        let client = GolfClient::from_club(&club);
-        client.login().await?;
+        let client = state.club_client(&club).await?;
 
-        let event = client.get_event(event_id).await?;
+        let event = with_relogin(&client, || client.get_event(event_id)).await?;
         let group = event.find_group(group_id);
         // A full slot can't be scheduled — there's no seat to race for. (The
         // detail page hides the button, so this only bites a direct URL.)
@@ -269,7 +288,10 @@ mod get {
         };
 
         // Metadata gives us the auto-open time to pre-fill (best-effort).
-        let meta = client.get_event_meta(event_id).await.ok().flatten();
+        let meta = with_relogin(&client, || client.get_event_meta(event_id))
+            .await
+            .ok()
+            .flatten();
         let default_time = meta
             .as_ref()
             .and_then(|m| m.auto_open_input())
@@ -308,11 +330,10 @@ mod get {
     }
 }
 
-/// Build a client, log in, and fetch the events list for a club.
-async fn fetch_events(club: &Club) -> anyhow::Result<Vec<GolfEvent>> {
-    let client = GolfClient::from_club(club);
-    client.login().await?;
-    client.get_events().await
+/// Fetch the events list for a club using its cached, logged-in client.
+async fn fetch_events(state: &AppState, club: &Club) -> anyhow::Result<Vec<GolfEvent>> {
+    let client = state.club_client(club).await?;
+    with_relogin(&client, || client.get_events()).await
 }
 
 mod post {
@@ -324,8 +345,7 @@ mod post {
         Path((club_id, event_id, group_id)): Path<(i64, u32, u32)>,
     ) -> Result<Response, AppError> {
         let club = load_club(&state, club_id).await?;
-        let client = GolfClient::from_club(&club);
-        client.login().await?;
+        let client = state.club_client(&club).await?;
 
         // Guard against booking a slot the club would reject anyway (full, or a
         // closed sheet). The page hides those buttons, but a stale page or a
