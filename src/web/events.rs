@@ -160,8 +160,11 @@ async fn render_detail(
     flash: Option<Flash>,
 ) -> Result<Response, AppError> {
     let event = with_relogin(client, || client.get_event(event_id)).await?;
-    // Metadata is best-effort — a detail page is still useful without it.
-    let summary = with_relogin(client, || client.get_event_meta(event_id))
+    // Metadata is best-effort — a detail page is still useful without it. Query
+    // just the event's own day (we already have its date) rather than the full
+    // listing window.
+    let meta_date = event.date.date();
+    let summary = with_relogin(client, || client.get_event_meta_on(event_id, meta_date))
         .await
         .ok()
         .flatten()
@@ -287,8 +290,10 @@ mod get {
             None => (None, None, None, None),
         };
 
-        // Metadata gives us the auto-open time to pre-fill (best-effort).
-        let meta = with_relogin(&client, || client.get_event_meta(event_id))
+        // Metadata gives us the auto-open time to pre-fill (best-effort). Query
+        // just the event's own day rather than the full listing window.
+        let meta_date = event.date.date();
+        let meta = with_relogin(&client, || client.get_event_meta_on(event_id, meta_date))
             .await
             .ok()
             .flatten();
