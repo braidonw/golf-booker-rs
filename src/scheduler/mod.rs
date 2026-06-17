@@ -26,6 +26,11 @@ const PREAUTH_LEAD_SECS: i64 = 30;
 const RETRY_WINDOW: Duration = Duration::from_secs(5);
 /// Delay between rapid-retry attempts within the retry window.
 const RETRY_INTERVAL: Duration = Duration::from_millis(250);
+/// A job armed more than this long after its target was almost certainly missed
+/// during an outage — fail it instead of racing a long-opened sheet. This sits
+/// well beyond the rapid-retry envelope (a few re-arms span well under a minute),
+/// so normal retries are never mistaken for stale jobs.
+const STALE_GRACE_SECS: i64 = 600;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobStatus {
@@ -307,6 +312,34 @@ async fn arm_and_run_job(
         Ok(None) => return fail_job(db, job.id, format!("club {club_id} not found")).await,
         Err(e) => return fail_job(db, job.id, format!("failed to load club {club_id}: {e}")).await,
     };
+
+    // A job whose target is far in the past was missed (e.g. the process was
+    // down when it should have fired). Firing now would race a sheet that opened
+    // long ago — book nothing useful, or the wrong thing — so fail it and notify
+    // rather than fire late. The target is stable across retries, so a job being
+    // rapidly retried near its deadline is never caught here.
+    let lateness = Utc::now() - target;
+    if lateness > chrono::Duration::seconds(STALE_GRACE_SECS) {
+        let msg = format!(
+            "missed scheduled time by {}s (the server was likely down when it should have fired)",
+            lateness.num_seconds()
+        );
+        if let Err(e) = set_status(db, job.id, JobStatus::Failed, Some(&msg)).await {
+            error!(job_id = job.id, "failed to mark stale job failed: {e}");
+        }
+        notify(
+            db,
+            mailer,
+            base_url,
+            &job,
+            &club_name,
+            &booking,
+            dry_run,
+            Err(msg),
+        )
+        .await;
+        return;
+    }
 
     info!(job_id = job.id, %target, "arming job");
 
@@ -780,6 +813,54 @@ mod tests {
         assert!(sched.get_user_jobs(user_id).await.unwrap()[0]
             .completed_at
             .is_some());
+    }
+
+    #[tokio::test]
+    async fn stale_job_is_failed_not_fired() {
+        let (sched, user_id, club_id) = fixture().await;
+        // Target is well beyond the stale grace (as if missed during an outage).
+        let stale = Utc::now() - chrono::Duration::seconds(STALE_GRACE_SECS + 60);
+        let id = sched
+            .schedule_booking(user_id, club_id, 1, 1, stale)
+            .await
+            .unwrap();
+        claim_job(&sched.db, id).await.unwrap();
+        let job = sched.get_user_jobs(user_id).await.unwrap().pop().unwrap();
+
+        arm_and_run_job(&sched.db, true, &sched.mailer, &sched.base_url, job).await;
+
+        let after = &sched.get_user_jobs(user_id).await.unwrap()[0];
+        assert_eq!(after.status, "failed");
+        assert!(
+            after
+                .last_error
+                .as_deref()
+                .unwrap()
+                .contains("missed scheduled time"),
+            "got: {:?}",
+            after.last_error
+        );
+    }
+
+    #[tokio::test]
+    async fn fresh_dry_run_job_completes_rather_than_being_called_stale() {
+        // A job at (about) its target is within grace and fires normally; in
+        // dry-run that means it completes. Guards against the staleness check
+        // being too aggressive.
+        let (sched, user_id, club_id) = fixture().await;
+        let id = sched
+            .schedule_booking(user_id, club_id, 1, 1, Utc::now())
+            .await
+            .unwrap();
+        claim_job(&sched.db, id).await.unwrap();
+        let job = sched.get_user_jobs(user_id).await.unwrap().pop().unwrap();
+
+        arm_and_run_job(&sched.db, true, &sched.mailer, &sched.base_url, job).await;
+
+        assert_eq!(
+            sched.get_user_jobs(user_id).await.unwrap()[0].status,
+            "completed"
+        );
     }
 
     #[tokio::test]
