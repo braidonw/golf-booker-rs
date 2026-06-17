@@ -266,6 +266,10 @@ mod post {
         )
         .await?;
 
+        // Credentials/URL may have changed — drop any cached client so the next
+        // request rebuilds and re-authenticates with the new details.
+        state.invalidate_club_client(id).await;
+
         Ok(Redirect::to("/clubs").into_response())
     }
 
@@ -275,6 +279,7 @@ mod post {
         headers: HeaderMap,
     ) -> Result<Response, AppError> {
         crate::clubs::delete(&state.db, id).await?;
+        state.invalidate_club_client(id).await;
 
         // HTMX swaps the deleted row out; a plain form submit redirects back.
         if headers.contains_key("hx-request") {
