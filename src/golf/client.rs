@@ -156,7 +156,7 @@ impl GolfClient {
             ("doAction", "makeBooking"),
             ("rowId", row_id.as_str()),
             ("memberId", self.member_id.as_str()),
-            ("myGroup", "false"),
+            ("myGroup", "true"),
             ("findAlternative", "false"),
         ];
         let url = format!("{}/members/Ajax", self.base_url);
