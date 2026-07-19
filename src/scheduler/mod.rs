@@ -26,6 +26,9 @@ const PREAUTH_LEAD_SECS: i64 = 30;
 const RETRY_WINDOW: Duration = Duration::from_secs(5);
 /// Delay between rapid-retry attempts within the retry window.
 const RETRY_INTERVAL: Duration = Duration::from_millis(250);
+/// Hold off firing by a random delay in this range (ms) so our booking doesn't
+/// land at the exact instant the sheet opens.
+const FIRE_JITTER_MS: std::ops::RangeInclusive<u64> = 3000..=4000;
 /// A job armed more than this long after its target was almost certainly missed
 /// during an outage — fail it instead of racing a long-opened sheet. This sits
 /// well beyond the rapid-retry envelope (a few re-arms span well under a minute),
@@ -541,8 +544,13 @@ async fn fire_booking(
             .map_err(|e| FireError::Retryable(format!("pre-auth login failed: {e}")))?;
     }
 
-    // 2. Sleep to the exact firing moment.
+    // 2. Sleep to the exact firing moment, then hold off a few seconds so the
+    // request doesn't arrive exactly on the hour the sheet opens.
     sleep_until(target, 0).await;
+    // thread_rng isn't Send, so draw the delay before awaiting.
+    let jitter = Duration::from_millis(rand::Rng::gen_range(&mut rand::thread_rng(), FIRE_JITTER_MS));
+    info!(jitter_ms = jitter.as_millis() as u64, "holding off before firing");
+    sleep(jitter).await;
 
     // 3. Fire, retrying rapidly until the retry window elapses.
     let deadline = Utc::now() + chrono::Duration::milliseconds(RETRY_WINDOW.as_millis() as i64);
