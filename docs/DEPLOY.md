@@ -33,12 +33,18 @@ Copy the key (`tskey-auth-…`). Treat it as a secret.
 
 Create a new **Docker Compose** resource pointing at this repo (it contains
 `docker-compose.yml` and `tailscale/serve.json`). The app image is not built on
-Coolify. GitHub Actions (`.github/workflows/deploy.yml`) tests every push to
-`main`, builds the `Dockerfile`, pushes `ghcr.io/braidonw/golf-booker-rs:main` to
-GHCR, then calls the Coolify deploy API. Coolify's auto-deploy is off, so that
-call is the only trigger. The VPS pulls the image from GHCR (`pull_policy:
-always`), using the `docker login ghcr.io` credential on the host. Only the
-Tailscale sidecar is still built on the host.
+Coolify. GitHub Actions (`.github/workflows/deploy.yml`) tests every pull request
+and push to `main`. On `main` it also builds the `Dockerfile`, pushes
+`ghcr.io/braidonw/golf-booker-rs:main` and a SHA tag to GHCR, then calls the
+Coolify deploy API. Only the Tailscale sidecar is still built on the host.
+
+Turn off auto-deploy on the resource (coolify-infra sets
+`is_auto_deploy_enabled = false`). Otherwise each push deploys before the new
+image exists. The workflow's deploy call is then the only trigger.
+
+The VPS pulls the image with `pull_policy: always`. The image is private, so root
+on the host must be logged in to GHCR: `docker login ghcr.io -u braidonw` with a
+classic PAT that has `read:packages`.
 
 The workflow needs the `COOLIFY_APP_UUID` repository variable and the
 `COOLIFY_DEPLOY_TOKEN` repository secret. The deploy job is skipped while the
@@ -116,8 +122,12 @@ confirmed everything works against your real club:
 
 ## Updating
 
-Merge to `main`. GitHub Actions builds and pushes the image and triggers the Coolify deploy. The `golf-data` volume persists, so your
-account, clubs, and scheduled jobs survive the redeploy.
+Merge to `main`. The `golf-data` volume persists, so your account, clubs, and
+scheduled jobs survive the redeploy.
+
+To roll back, revert the bad commit on `main`. For a faster fix, set the compose
+image in Coolify to `ghcr.io/braidonw/golf-booker-rs:<sha>` of a good build and
+redeploy, then put `:main` back once `main` is fixed.
 
 ## Persistence & backups
 
