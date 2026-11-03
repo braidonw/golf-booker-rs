@@ -2,6 +2,8 @@
 # app over HTTPS via `tailscale serve`; golf-booker shares the sidecar's network
 # so it is reachable ONLY at https://<hostname>.<tailnet>.ts.net — never on the
 # public internet. Suitable for Coolify (deploy as a Docker Compose resource).
+# GitHub Actions builds the golf-booker image and pushes it to GHCR; the sidecar
+# is built locally on the host.
 #
 # Set secrets via the environment (Coolify env vars / a .env file): at minimum
 # TS_AUTHKEY, APP_USERNAME, APP_PASSWORD. See docs/DEPLOY.md.
@@ -29,8 +31,8 @@ services:
     restart: unless-stopped
 
   golf-booker:
-    build: .
-    # image: ghcr.io/you/golf-booker:latest   # or pull a prebuilt image instead
+    image: ghcr.io/braidonw/golf-booker-rs:main
+    pull_policy: always
     # Share the Tailscale container's network namespace so `tailscale serve` can
     # proxy to 127.0.0.1:8080. (A container using network_mode cannot publish its
     # own ports — that's the point: no public exposure.)

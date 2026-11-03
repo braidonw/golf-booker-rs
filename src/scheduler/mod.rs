@@ -548,8 +548,14 @@ async fn fire_booking(
     // request doesn't arrive exactly on the hour the sheet opens.
     sleep_until(target, 0).await;
     // thread_rng isn't Send, so draw the delay before awaiting.
-    let jitter = Duration::from_millis(rand::Rng::gen_range(&mut rand::thread_rng(), FIRE_JITTER_MS));
-    info!(jitter_ms = jitter.as_millis() as u64, "holding off before firing");
+    let jitter = Duration::from_millis(rand::Rng::gen_range(
+        &mut rand::thread_rng(),
+        FIRE_JITTER_MS,
+    ));
+    info!(
+        jitter_ms = jitter.as_millis() as u64,
+        "holding off before firing"
+    );
     sleep(jitter).await;
 
     // 3. Fire, retrying rapidly until the retry window elapses.
