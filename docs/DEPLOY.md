@@ -32,7 +32,17 @@ Copy the key (`tskey-auth-…`). Treat it as a secret.
 ## 2. Deploy on Coolify
 
 Create a new **Docker Compose** resource pointing at this repo (it contains
-`docker-compose.yml`, the `Dockerfile`, and `tailscale/serve.json`).
+`docker-compose.yml` and `tailscale/serve.json`). The app image is not built on
+Coolify. GitHub Actions (`.github/workflows/deploy.yml`) tests every push to
+`main`, builds the `Dockerfile`, pushes `ghcr.io/braidonw/golf-booker-rs:main` to
+GHCR, then calls the Coolify deploy API. Coolify's auto-deploy is off, so that
+call is the only trigger. The VPS pulls the image from GHCR (`pull_policy:
+always`), using the `docker login ghcr.io` credential on the host. Only the
+Tailscale sidecar is still built on the host.
+
+The workflow needs the `COOLIFY_APP_UUID` repository variable and the
+`COOLIFY_DEPLOY_TOKEN` repository secret. The deploy job is skipped while the
+variable is unset.
 
 Set these environment variables (Coolify → the resource → Environment Variables;
 mark the secrets as such):
@@ -106,7 +116,7 @@ confirmed everything works against your real club:
 
 ## Updating
 
-Push changes and redeploy in Coolify. The `golf-data` volume persists, so your
+Merge to `main`. GitHub Actions builds and pushes the image and triggers the Coolify deploy. The `golf-data` volume persists, so your
 account, clubs, and scheduled jobs survive the redeploy.
 
 ## Persistence & backups
